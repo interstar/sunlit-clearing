@@ -1,0 +1,4 @@
+# Python test / coverage tooling for Sunlit Clearing
+pytest>=7.0
+pytest-cov>=4.0
+coverage>=7.0
