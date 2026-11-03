@@ -74,12 +74,17 @@
         cleaned (-> (or rel "")
                     (str/replace #"\\" "/")
                     (str/replace #"^/+" ""))
-        f (if (str/blank? cleaned)
-            root
-            (.getCanonicalFile (io/file root cleaned)))]
-    (when-not (str/starts-with? (.getPath f) (.getPath root))
-      (throw (ex-info "Path escapes repository" {:path rel})))
-    f))
+        ]
+    (if (str/blank? cleaned)
+      root
+      (let [root-path (.toPath root)
+            resolved (.normalize (.resolve root-path cleaned))]
+        (when-not (.startsWith resolved root-path)
+          (throw (ex-info "Path escapes repository" {:path rel})))
+        (let [canon (.getCanonicalFile (.toFile resolved))]
+          (when-not (.startsWith (.toPath canon) root-path)
+            (throw (ex-info "Path escapes repository" {:path rel})))
+          canon)))))
 
 (defn relativize [file]
   (let [root (.getCanonicalFile (repo-root))
@@ -110,8 +115,7 @@
 
 (defn- skip-dir? [name]
   (or (contains? skip-dir-names name)
-      (and (str/starts-with? name ".")
-           (not= name sidecar-dirname))))
+      (str/starts-with? name ".")))
 
 (defn- extension [name]
   (let [i (str/last-index-of name ".")]

@@ -4,9 +4,15 @@
             [clojure.string :as str]
             [codestory.plugins.leiningen :as leiningen]
             [codestory.plugins.cloverage :as cloverage]
+            [codestory.plugins.gallery :as gallery]
             [codestory.plugins.hxcov :as hxcov]
+            [codestory.plugins.image :as image]
             [codestory.plugins.instaparse :as instaparse]
             [codestory.plugins.malli :as malli]
+            [codestory.plugins.matrix :as matrix]
+            [codestory.plugins.mystyle-clj :as mystyle-clj]
+            [codestory.plugins.mystyle-py :as mystyle-py]
+            [codestory.plugins.mystyle-js :as mystyle-js]
             [codestory.plugins.projectlint :as projectlint]
             [codestory.plugins.pycov :as pycov]
             [codestory.plugins.python-tools :as python-tools]
@@ -22,6 +28,11 @@
 
 (def ^:private builtin-defs
   [leiningen/plugin
+   image/plugin
+   gallery/plugin
+   mystyle-clj/plugin
+   mystyle-py/plugin
+   mystyle-js/plugin
    run/plugin
    unittests/plugin
    cloverage/plugin
@@ -36,6 +47,7 @@
    structure/cpp-plugin
    malli/plugin
    instaparse/plugin
+   matrix/plugin
    projectlint/plugin])
 
 (defn- normalize
@@ -50,6 +62,7 @@
          :description (or (:description entry) description "")
          :run run-fn
          :start! (:start! entry)
+         :update (:update entry)
          :long-running? (boolean (or (:long-running? entry) (:start! entry)))
          :source (or (:source entry) source :builtin)
          :file file}))

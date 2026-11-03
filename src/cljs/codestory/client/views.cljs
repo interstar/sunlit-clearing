@@ -17,11 +17,24 @@
      "Architecture"]
     [:a {:href "#/conventions" :class (when (= :conventions (:page route)) "active")} "Conventions"]
     [:a {:href "#/testing" :class (when (= :testing (:page route)) "active")} "Testing"]
+    [:a {:href "#/lint" :class (when (= :lint (:page route)) "active")} "Lint"]
     [:a {:href "#/sessions" :class (when (#{:sessions :session} (:page route)) "active")} "Sessions"]
+    [:a {:href "#/agents" :class (when (= :agents (:page route)) "active")} "Agents"]
     [:a {:href "#/plugins" :class (when (= :plugins (:page route)) "active")} "Plugins"]]
    [:div.nav-actions
     [:button.btn-ghost {:on-click #(js/history.back)} "Back"]
     [:button.btn-ghost {:on-click #(js/history.forward)} "Forward"]]])
+
+(def image-exts
+  #{"png" "jpg" "jpeg" "gif" "webp" "svg" "bmp" "ico" "avif"})
+
+(defn- file-ext [name]
+  (let [n (str/lower-case (or name ""))
+        i (str/last-index-of n ".")]
+    (when (and i (pos? i)) (subs n (inc i)))))
+
+(defn- image-file? [file]
+  (boolean (and file (contains? image-exts (file-ext (:name file))))))
 
 (defn- parse-params-attr [el]
   (try
@@ -89,6 +102,20 @@
           (when (.-contentDocument iframe)
             (on-load nil)))))))
 
+(defn- attach-diagram-links! [el]
+  (when-let [raw (.getAttribute el "data-links")]
+    (try
+      (let [links (js->clj (.parse js/JSON raw) :keywordize-keys true)]
+        (doseq [{:keys [id href]} links
+                :let [sel (str "[id^=\"flowchart-" id "-\"], [id^=\"classId-" id "-\"]")]]
+          (doseq [node (array-seq (.querySelectorAll el sel))]
+            (set! (.-cursor (.-style node)) "pointer")
+            (set! (.-onclick node)
+                  (fn [e]
+                    (.preventDefault e)
+                    (set! (.-hash js/location) href))))))
+      (catch :default _))))
+
 (defn- bind-mermaid! [root-el]
   (when (and root-el (exists? js/mermaid))
     (try
@@ -101,8 +128,133 @@
                          (nil? (.querySelector n "svg")))
                 (.removeAttribute n "data-processed"))))
           ;; js-invoke keeps "run" intact under :advanced
-          (js-invoke js/mermaid "run" #js {:nodes nodes})))
+          (let [result (js-invoke js/mermaid "run" #js {:nodes nodes})]
+            (.then result
+                   (fn []
+                     (doseq [n (array-seq nodes)]
+                       (attach-diagram-links! n)))))))
       (catch :default _))))
+
+(defn- query-all [root sel]
+  (array-seq (.querySelectorAll root sel)))
+
+(defn- attr [el k] (or (.getAttribute el k) ""))
+
+;; Active slice tab per matrix (doc + fence), so edits don't reset the view.
+(defonce ^:private matrix-tabs (atom {}))
+
+(defn- matrix-key [panel]
+  (str (attr panel "data-doc") "#" (attr panel "data-fence")))
+
+(defn- matrix-post! [panel action on-done]
+  (api/post-json "/api/fence"
+                 {:doc (attr panel "data-doc")
+                  :index (js/parseInt (attr panel "data-fence") 10)
+                  :plugin "matrix"
+                  :action action}
+                 (fn [res]
+                   (if (false? (:ok res))
+                     (js/alert (str "Matrix update failed: " (:error res)))
+                     (when on-done (on-done))))
+                 (fn [err] (js/alert (str "Matrix update failed: " err)))))
+
+(def ^:private matrix-editor-html
+  (str "<form class=\"matrix-editor\">"
+       "<h4 class=\"js-title\"></h4>"
+       "<label>Link <input name=\"link\" autocomplete=\"off\" "
+       "placeholder=\"path/to/file.clj#symbol  ·  path#42  ·  path#10-30\"></label>"
+       "<p class=\"matrix-editor-hint js-auto\"></p>"
+       "<label>Status <select name=\"status\">"
+       "<option value=\"\">auto</option><option value=\"done\">done</option>"
+       "<option value=\"todo\">todo</option><option value=\"n/a\">n/a (deliberately absent)</option>"
+       "</select></label>"
+       "<label>Note <input name=\"note\" autocomplete=\"off\"></label>"
+       "<div class=\"btn-row\">"
+       "<button type=\"submit\" class=\"btn\">Save</button>"
+       "<button type=\"button\" class=\"btn-ghost js-clear\">Clear cell</button>"
+       "<button type=\"button\" class=\"btn-ghost js-cancel\">Cancel</button>"
+       "</div></form>"))
+
+(defn- open-matrix-editor! [panel td on-done]
+  (let [coords (js->clj (.parse js/JSON (attr td "data-coords")))
+        backdrop (.createElement js/document "div")
+        _ (set! (.-className backdrop) "matrix-editor-backdrop")
+        _ (set! (.-innerHTML backdrop) matrix-editor-html)
+        form (.querySelector backdrop "form")
+        field #(.querySelector form (str "[name=" % "]"))
+        close! #(.remove backdrop)
+        post! (fn [action]
+                (close!)
+                (matrix-post! panel (assoc action :coords coords) on-done))
+        auto-link (attr td "data-auto-link")]
+    (set! (.-textContent (.querySelector form ".js-title")) (str/join " × " (vals coords)))
+    (set! (.-textContent (.querySelector form ".js-auto"))
+          (if (str/blank? auto-link)
+            "Repo-relative path; #anchor is a symbol or line(s)."
+            (str "From pattern: " auto-link " (a link here overrides it)")))
+    (set! (.-value (field "link")) (attr td "data-link"))
+    (set! (.-value (field "status")) (attr td "data-status"))
+    (set! (.-value (field "note")) (attr td "data-note"))
+    (set! (.-onsubmit form)
+          (fn [e]
+            (.preventDefault e)
+            (post! {:op "set-cell"
+                    :link (.-value (field "link"))
+                    :status (.-value (field "status"))
+                    :note (.-value (field "note"))})))
+    (set! (.-onclick (.querySelector form ".js-clear")) #(post! {:op "clear-cell"}))
+    (set! (.-onclick (.querySelector form ".js-cancel")) close!)
+    (set! (.-onclick backdrop) #(when (= (.-target %) backdrop) (close!)))
+    (set! (.-onkeydown backdrop) #(when (= "Escape" (.-key %)) (close!)))
+    (.appendChild (.-body js/document) backdrop)
+    (.focus (field "link"))))
+
+(defn- show-matrix-slice! [panel slice]
+  (doseq [el (query-all panel ".matrix-slice")]
+    (set! (.-hidden el) (not= slice (attr el "data-slice"))))
+  (doseq [b (query-all panel ".matrix-tab")]
+    (if (= slice (attr b "data-slice"))
+      (.add (.-classList b) "active")
+      (.remove (.-classList b) "active")))
+  (swap! matrix-tabs assoc (matrix-key panel) slice))
+
+(defn- bind-matrix!
+  "Wire matrix plugin panels: slice tabs, axis selects, cell editor.
+  Edits go to /api/fence, which rewrites the plugin's own fence params."
+  [root-el on-done]
+  (when root-el
+    (doseq [panel (query-all root-el ".matrix-panel")]
+      (doseq [b (query-all panel ".matrix-tab")]
+        (set! (.-onclick b) #(show-matrix-slice! panel (attr b "data-slice"))))
+      (when-let [slice (get @matrix-tabs (matrix-key panel))]
+        (when (.querySelector panel (str ".matrix-slice[data-slice=\"" slice "\"]"))
+          (show-matrix-slice! panel slice)))
+      (when (seq (attr panel "data-doc"))
+        (doseq [sel (query-all panel ".matrix-axis")]
+          (set! (.-onchange sel)
+                (fn [_]
+                  (let [v #(.-value (.querySelector panel (str ".matrix-axis[data-axis=" % "]")))]
+                    (matrix-post! panel {:op "set-axes" :rows (v "rows") :cols (v "cols")
+                                         :changed (attr sel "data-axis")}
+                                  on-done)))))
+        (doseq [td (query-all panel "td.matrix-cell[data-coords]")]
+          (let [open! #(open-matrix-editor! panel td on-done)]
+            (when-let [btn (.querySelector td ".matrix-edit")]
+              (set! (.-onclick btn) (fn [e] (.preventDefault e) (open!))))
+            ;; checklist mode: tick = done, untick = back to open;
+            ;; any link/note on the cell is kept
+            (when-let [box (.querySelector td ".matrix-check")]
+              (set! (.-onchange box)
+                    (fn [_]
+                      (set! (.-disabled box) true)
+                      (matrix-post! panel
+                                    {:op "set-cell"
+                                     :coords (js->clj (.parse js/JSON (attr td "data-coords")))
+                                     :link (attr td "data-link")
+                                     :note (attr td "data-note")
+                                     :status (if (.-checked box) "done" "")}
+                                    on-done))))
+            (set! (.-ondblclick td) (fn [e] (.preventDefault e) (open!)))))))))
 
 (defn html-panel
   "Render server HTML and wire long-running Rerun buttons + iframe sizing."
@@ -112,12 +264,15 @@
      {:component-did-mount
       (fn [_]
         (bind-rerun-buttons! @el on-rerun)
+        (bind-matrix! @el on-rerun)
         (bind-iframes! @el)
         (bind-mermaid! @el)
         (wchnt/enhance-pre-codes! @el {:unlabeled? false}))
       :component-did-update
-      (fn [_]
-        (bind-rerun-buttons! @el on-rerun)
+      (fn [this]
+        (let [{:keys [on-rerun]} (second (r/argv this))]
+          (bind-rerun-buttons! @el on-rerun)
+          (bind-matrix! @el on-rerun))
         (bind-iframes! @el)
         (bind-mermaid! @el)
         (wchnt/enhance-pre-codes! @el {:unlabeled? false}))
@@ -265,16 +420,27 @@
 
        :else
        (let [children (:children dir)
-             parent (:parent dir)]
+             parent (:parent dir)
+             gallery? (boolean (some #(= "gallery" (:plugin %)) (:auto_plugins data)))
+             tree-children (if gallery?
+                             (remove #(and (= "file" (:type %)) (image-file? %)) children)
+                             children)]
          [:<>
+          (when (seq (:auto_plugins data))
+            [:div.auto-plugins
+             (for [[i p] (map-indexed vector (:auto_plugins data))]
+               ^{:key i}
+               [html-panel {:html (or (:html p) "") :on-rerun nil}])])
           (when parent
             [:p.dir-up
              [:a {:href (str "#/dir/" (js/encodeURIComponent parent))}
               "↑ up to " [:code parent]]])
-          (if (empty? children)
-            [:p.muted "This directory is empty."]
+          (if (empty? tree-children)
+            (if gallery?
+              [:p.muted "Only images here — shown above."]
+              [:p.muted "This directory is empty."])
             [:ul.tree.root
-             (for [child children]
+             (for [child tree-children]
                ^{:key (:path child)}
                [tree-node {:node child
                            :expanded expanded
@@ -282,8 +448,8 @@
                            :depth 0}])])]))]))
 
 
-(defn- markdown-tabs [content language]
-  (r/with-let [tab (r/atom :source)]
+(defn- markdown-tabs [content language target on-line]
+  (r/with-let [tab (r/atom (if target :source :rendered))]
     [:<>
      [:div.tab-bar
       [:button.tab {:class (when (= :source @tab) "active")
@@ -291,11 +457,51 @@
       [:button.tab {:class (when (= :rendered @tab) "active")
                     :on-click #(reset! tab :rendered)} "Rendered"]]
      (if (= :source @tab)
-       [md/code-block content language]
+       [md/code-view content language target on-line]
        [md/markdown-doc content])]))
 
+(defn- parse-line-param
+  "\"12\" / \"12-30\" -> {:line 12 :end 30}"
+  [s]
+  (when-let [[_ a b] (re-matches #"(\d+)(?:-(\d+))?" (or s ""))]
+    (let [a (js/parseInt a 10)
+          b (if b (js/parseInt b 10) a)]
+      {:line (min a b) :end (max a b)})))
+
+(defn- file-target [route data]
+  (or (parse-line-param (:line route))
+      (when (and (:sym route) (get-in data [:target :found]))
+        (select-keys (:target data) [:line :end]))))
+
+(defn- line-href [path {:keys [line end]}]
+  (str "#/file/" (js/encodeURIComponent path)
+       "?line=" line (when (and end (not= end line)) (str "-" end))))
+
+(defn- location-note [route data target path]
+  (let [sym (:sym route)
+        t (:target data)]
+    (cond
+      (and sym (false? (:found t)))
+      [:p.error (str "Symbol “" sym "” not found in this file.")]
+
+      target
+      [:p.location-note
+       (if sym
+         [:<> "Symbol " [:code sym]
+          (when (false? (:exact t)) " (first mention — no definition found)")
+          " · "]
+         "Selected ")
+       (if (= (:line target) (:end target))
+         (str "line " (:line target))
+         (str "lines " (:line target) "–" (:end target)))
+       " · "
+       [:a {:href (line-href path target)} "permalink"]
+       " · "
+       [:a {:href (str "#/file/" (js/encodeURIComponent path))} "clear"]])))
+
 (defn file-page [st navigate! on-save reload-file!]
-  (let [data (:file st)]
+  (let [data (:file st)
+        route (:route st)]
     [:section.page.file-page
      (cond
        (or (nil? data) (:loading data))
@@ -306,7 +512,16 @@
 
        :else
        (let [file (:file data)
-             path (:path file)]
+             path (:path file)
+             image? (image-file? file)
+             target (file-target route data)
+             on-line (fn [line shift?]
+                       (navigate!
+                        (line-href path
+                                   (if (and shift? target)
+                                     {:line (min line (:line target))
+                                      :end (max line (:end target))}
+                                     {:line line :end line}))))]
          [:<>
           [:div.page-head
            [:div
@@ -331,18 +546,26 @@
            [:div.section-head
             [:h2 "Source"]
             [:span.meta (str (:size file) " bytes"
-                             (when (:language file) (str " · " (:language file))))]]
+                             (if image?
+                               " · image"
+                               (when (:language file)
+                                 (str " · " (:language file)))))]]
+           [location-note route data target path]
            (if (:text? file)
              (cond
                (md/wcn-file? file)
                [md/wcn-doc (:content file)]
 
                (md/markdown-file? file)
-               [markdown-tabs (:content file) (:language file)]
+               ^{:key path}
+               [markdown-tabs (:content file) (:language file) target on-line]
 
                :else
-               [md/code-block (:content file) (:language file)])
-             [:p.muted "Binary or large file — content not shown. A plugin may open this later."])]]))]))
+               ^{:key path}
+               [md/code-view (:content file) (:language file) target on-line])
+             (if image?
+               [:p.muted "Image preview is shown above."]
+               [:p.muted "Binary or large file — content not shown. A plugin may open this later."]))]]))]))
 
 (defn wiki-page [st on-save on-create reload!]
   (let [data (:wiki st)]
@@ -415,6 +638,27 @@
 
        (false? (:ok data))
        [:p.error (or (:error data) "Could not run tests")]
+
+       :else
+       [:<>
+        (for [panel (:panels data)]
+          ^{:key (:plugin panel)}
+          [html-panel {:html (:html panel) :on-rerun reload!}])])]))
+
+(defn lint-page [st reload!]
+  (let [data (:lint st)]
+    [:section.page.lint-page
+     [:div.page-head
+      [:div
+       [:h1 "Lint"]
+       [:p.muted "mystyle-clj · mystyle-py · mystyle-js"]]
+      [:button.btn {:on-click reload!} "Refresh"]]
+     (cond
+       (or (nil? data) (:loading data))
+       [:p.muted "Loading linter results…"]
+
+       (false? (:ok data))
+       [:p.error (or (:error data) "Could not load linters")]
 
        :else
        [:<>
@@ -553,3 +797,60 @@
              [:span.role (:role m)]
              [:span.when (or (:timestamp m) "")]]
             [md/message-body (:text m)]])]])]))
+
+(defn json-endpoint [url]
+  (let [state (r/atom {:loading true})]
+    (r/create-class
+     {:component-did-mount
+      (fn [_]
+        (api/get-json url
+                      (fn [d] (reset! state {:data d}))
+                      (fn [e] (reset! state {:error e}))))
+      :reagent-render
+      (fn [url]
+        (let [{:keys [data error loading]} @state]
+          [:section.agent-endpoint
+           [:div.section-head
+            [:h3 [:code url]]
+            [:button.btn-ghost
+             {:on-click
+              (fn []
+                (reset! state {:loading true})
+                (api/get-json url
+                              (fn [d] (reset! state {:data d}))
+                              (fn [e] (reset! state {:error e}))))}
+             "Refresh"]]
+           (cond
+             loading [:p.muted "Loading…"]
+             error [:p.error error]
+             data [:pre.agent-json (js/JSON.stringify (clj->js data) nil 2)]
+             :else [:p.muted "No data"])]))})))
+
+(defn agents-page [st reload!]
+  (let [data (:agents st)]
+    [:section.page.agents-page
+     [:div.page-head
+      [:h1 "Agent endpoints"]
+      [:button.btn {:on-click reload!} "Refresh index"]]
+     (cond
+       (or (nil? data) (:loading data))
+       [:p.muted "Loading agent index…"]
+
+       (false? (:ok data))
+       [:p.error (or (:error data) "Could not load /agents/")]
+
+       :else
+       [:div
+        [:section.agent-endpoint
+         [:div.section-head
+          [:h3 [:code "/agents/"]]
+          [:button.btn-ghost {:on-click reload!} "Refresh"]]
+         [:pre.agent-json (js/JSON.stringify (clj->js data) nil 2)]]
+        [json-endpoint "/agents/tree"]
+        [json-endpoint "/agents/conventions"]
+        (for [p (:pages data)]
+          ^{:key p}
+          [json-endpoint (str "/agents/page/" (js/encodeURIComponent p))])
+        (for [pl (map :name (:plugins data))]
+          ^{:key pl}
+          [json-endpoint (str "/agents/plugin/" (js/encodeURIComponent pl))])])]))

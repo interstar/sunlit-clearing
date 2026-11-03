@@ -1,10 +1,13 @@
 (ns codestory.server
   (:require [cheshire.core :as json]
             [clojure.string :as str]
+            [codestory.agents :as agents]
             [codestory.annotations :as ann]
             [codestory.conventions :as conventions]
+            [codestory.fences :as fences]
             [codestory.git :as git]
             [codestory.jobs :as jobs]
+            [codestory.locate :as locate]
             [codestory.pages :as pages]
             [codestory.plugins :as plugins]
             [codestory.render :as render]
@@ -60,24 +63,33 @@
       (catch Exception e
         (err 500 (.getMessage e)))))
 
-  (GET "/api/file" [path]
+  (GET "/api/file" [path sym]
     (try
       (let [file (repo/read-file path)
             annotation (ann/read-annotation path)
             rendered (render/render-annotation (:markdown annotation) path)
-            auto (render/auto-plugins-for path)]
-        (json-response {:ok true
-                        :file file
-                        :annotation annotation
-                        :annotation_html (:html rendered)
-                        :auto_plugins auto}))
+            auto (render/auto-plugins-for path)
+            target (when-not (str/blank? sym)
+                     (merge {:symbol sym :found false}
+                            (some-> (locate/find-symbol (:content file) (:language file) sym)
+                                    (assoc :found true))))]
+        (json-response (cond-> {:ok true
+                                :file file
+                                :annotation annotation
+                                :annotation_html (:html rendered)
+                                :auto_plugins auto}
+                         target (assoc :target target))))
       (catch Exception e
         (err 400 (.getMessage e)))))
 
   (GET "/api/dir" [path]
     (try
-      (let [dir (repo/dir-info (or path ""))]
-        (json-response {:ok true :dir (git/annotate-tree dir)}))
+      (let [p (or path "")
+            dir (repo/dir-info p)
+            auto (render/auto-plugins-for-dir p)]
+        (json-response {:ok true
+                        :dir (git/annotate-tree dir)
+                        :auto_plugins auto}))
       (catch Exception e
         (err 400 (.getMessage e)))))
 
@@ -133,6 +145,17 @@
                         :page result
                         :page_html (:html rendered)
                         :created (:created result)}))
+      (catch Exception e
+        (err 400 (.getMessage e)))))
+
+  ;; A plugin rewriting its own ```plugin fence params in a sidecar doc.
+  (POST "/api/fence" req
+    (try
+      (let [{:keys [doc index plugin action]} (read-json-body req)]
+        (when (or (str/blank? doc) (not (integer? index)) (str/blank? plugin))
+          (throw (ex-info "doc, index and plugin are required" {})))
+        (json-response (select-keys (fences/update-fence! doc index plugin action)
+                                    [:ok :params])))
       (catch Exception e
         (err 400 (.getMessage e)))))
 
@@ -202,6 +225,47 @@
 
   (GET "/api/sessions/:id" [id]
     (json-response (sessions/show id)))
+
+  ;; ---- Agent-facing JSON endpoints ----
+
+  (GET "/agents" []
+    (try (json-response (agents/index-payload))
+         (catch Exception e (err 500 (.getMessage e)))))
+
+  (GET "/agents/" []
+    (try (json-response (agents/index-payload))
+         (catch Exception e (err 500 (.getMessage e)))))
+
+  (GET "/agents/tree" []
+    (try (json-response (agents/tree-payload))
+         (catch Exception e (err 500 (.getMessage e)))))
+
+  (GET "/agents/conventions" []
+    (try (json-response (agents/conventions-payload))
+         (catch Exception e (err 500 (.getMessage e)))))
+
+  (GET "/agents/page/:name" [name]
+    (try (json-response (agents/page-payload name))
+         (catch Exception e (err 400 (.getMessage e)))))
+
+  (GET ["/agents/file/:path" :path #".*"] [path]
+    (try (json-response (agents/file-payload path))
+         (catch Exception e (err 400 (.getMessage e)))))
+
+  (GET "/agents/plugin/:name/:id" [name id :as req]
+    (try
+      (let [qp (:query-params req)
+            refresh? (contains? #{"1" "true"} (str (get qp "refresh")))]
+        (json-response (agents/plugin-result name {:id id :refresh? refresh?})))
+      (catch Exception e (err 400 (.getMessage e)))))
+
+  (GET "/agents/plugin/:name" [name :as req]
+    (try
+      (let [qp (:query-params req)
+            id (get qp "id")
+            refresh? (contains? #{"1" "true"} (str (get qp "refresh")))]
+        (json-response (agents/plugin-result name {:id id :refresh? refresh?})))
+      (catch Exception e (err 400 (.getMessage e)))))
 
   (GET "/" []
     (-> (response/resource-response "public/index.html")

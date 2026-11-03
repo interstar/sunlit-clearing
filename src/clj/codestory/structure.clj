@@ -1,7 +1,8 @@
 (ns codestory.structure
   "Deterministic architectural extraction from source (no LLM).
   Per-language scans render as separate plugin boxes."
-  (:require [clojure.string :as str]
+  (:require [cheshire.core :as json]
+            [clojure.string :as str]
             [codestory.clj-source :as src]
             [codestory.git :as git]
             [codestory.repo :as repo]
@@ -32,31 +33,51 @@
       (str/replace #"[^A-Za-z0-9_]" "_")
       (#(if (re-find #"^[0-9]" %) (str "n_" %) %))))
 
+(defn- attr-json [x]
+  (-> (json/generate-string x)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")
+      (str/replace "\"" "&quot;")))
+
 (defn- mermaid-block
-  "Embed Mermaid source safely for innerHTML (angle brackets must be escaped)."
-  [title source]
-  (when-not (str/blank? source)
-    (str "<div class=\"structure-diagram\">"
-         "<h4>" (src/html-escape title) "</h4>"
-         "<pre class=\"mermaid\">" (src/html-escape source) "</pre>"
-         "</div>")))
+  "Embed Mermaid source safely for innerHTML (angle brackets must be escaped).
+  `diagram` is {:source \"…\" :links [{:id :href}]}; links are attached client-side."
+  [title diagram]
+  (let [source (:source diagram)
+        links (:links diagram)]
+    (when-not (str/blank? source)
+      (str "<div class=\"structure-diagram\">"
+           "<h4>" (src/html-escape title) "</h4>"
+           "<pre class=\"mermaid\""
+           (when (seq links)
+             (str " data-links=\"" (attr-json links) "\""))
+           ">" (src/html-escape source) "</pre>"
+           "</div>"))))
 
 (defn mermaid-ns-graph
-  "Mermaid flowchart of in-repo namespace requires. Caps size for readability."
-  [edges]
+  "Mermaid flowchart of in-repo namespace requires. Caps size for readability.
+  Returns {:source \"…\" :links [{:id :href}]} or nil when there is nothing to
+  draw. `name->path` maps node names to repo-relative file paths for links."
+  [edges name->path]
   (let [edges (vec (take max-diagram-edges edges))
         nodes (sort (set (mapcat (juxt :from :to) edges)))]
     (when (and (seq edges) (<= (count nodes) max-diagram-nodes))
-      (str "flowchart LR\n"
-           (->> nodes
-                (map (fn [n]
-                       (str "  " (mermaid-id n) "[\"" n "\"]")))
-                (str/join "\n"))
-           "\n"
-           (->> edges
-                (map (fn [{:keys [from to]}]
-                       (str "  " (mermaid-id from) " --> " (mermaid-id to))))
-                (str/join "\n"))))))
+      {:source (str "flowchart LR\n"
+                    (->> nodes
+                         (map (fn [n]
+                                (str "  " (mermaid-id n) "[\"" n "\"]")))
+                         (str/join "\n"))
+                    "\n"
+                    (->> edges
+                         (map (fn [{:keys [from to]}]
+                                (str "  " (mermaid-id from) " --> " (mermaid-id to))))
+                         (str/join "\n")))
+       :links (vec (keep (fn [n]
+                           (when-let [p (get name->path n)]
+                             {:id (mermaid-id n)
+                              :href (src/file-href p)}))
+                         nodes))})))
 
 (defn- package-key
   "Roll a module owner/path up to a stable package bucket for overview diagrams."
@@ -73,8 +94,17 @@
                   (str/replace #"/" "."))]
         (if (str/blank? p) "root" p)))))
 
+(defn- package-dir [pkg]
+  (if (= pkg "root") "" (str/replace pkg "." "/")))
+
+(defn- dir-href [path]
+  (str "#/dir/" (-> (str path)
+                    (java.net.URLEncoder/encode "UTF-8")
+                    (str/replace "+" "%20"))))
+
 (defn mermaid-package-overview
-  "TB flowchart of packages with class counts — readable for larger repos."
+  "TB flowchart of packages with class counts — readable for larger repos.
+  Returns {:source :links} or nil. Package nodes link to their directory page."
   [units]
   (let [counts (->> units
                     (reduce (fn [m u]
@@ -86,20 +116,26 @@
         ;; Keep the busiest packages so the chart stays scannable
         counts (vec (take max-diagram-nodes counts))]
     (when (>= (count counts) 2)
-      (str "flowchart TB\n"
-           (->> counts
-                (map (fn [[p n]]
-                       (str "  " (mermaid-id p)
-                            "[\"" p "\\n" n " class" (when (not= 1 n) "es") "\"]")))
-                (str/join "\n"))))))
+      {:source (str "flowchart TB\n"
+                    (->> counts
+                         (map (fn [[p n]]
+                                (str "  " (mermaid-id p)
+                                     "[\"" p "\\n" n " class" (when (not= 1 n) "es") "\"]")))
+                         (str/join "\n")))
+       :links (mapv (fn [[p _n]]
+                      {:id (mermaid-id p)
+                       :href (dir-href (package-dir p))})
+                    counts)})))
 
 (defn mermaid-class-diagram
   "Inheritance-only classDiagram for in-repo bases. Skips when too large or empty.
+  Returns {:source :links} or nil. Class nodes link to their defining file.
 
   Drawing every class as an orphan box (old behaviour) is unreadable past ~20
   types; Mermaid then squash-fits the SVG into a useless strip."
   [types]
   (let [type-names (set (map :name types))
+        name->path (into {} (map (juxt :name :path) types))
         inherit (->> (for [t types
                            b (:bases t)
                            :when (and b
@@ -112,15 +148,20 @@
     (when (and (seq inherit)
                (<= (count nodes) max-diagram-nodes)
                (<= (count inherit) max-diagram-edges))
-      (str "classDiagram\n"
-           (->> nodes
-                (map (fn [n] (str "  class " (mermaid-id n))))
-                (str/join "\n"))
-           "\n"
-           (->> inherit
-                (map (fn [{:keys [from to]}]
-                       (str "  " (mermaid-id to) " <|-- " (mermaid-id from))))
-                (str/join "\n"))))))
+      {:source (str "classDiagram\n"
+                    (->> nodes
+                         (map (fn [n] (str "  class " (mermaid-id n))))
+                         (str/join "\n"))
+                    "\n"
+                    (->> inherit
+                         (map (fn [{:keys [from to]}]
+                                (str "  " (mermaid-id to) " <|-- " (mermaid-id from))))
+                         (str/join "\n")))
+       :links (vec (keep (fn [n]
+                           (when-let [p (get name->path n)]
+                             {:id (mermaid-id n)
+                              :href (src/file-href p)}))
+                         nodes))})))
 
 (defn scan-clojure
   ([] (scan-clojure {}))
@@ -333,7 +374,7 @@
 (defn- type-row [t]
   [:tr
    [:td [:code (:kind t)]]
-   [:td [:code (:name t)]]
+   [:td [:a {:href (src/file-href (:path t))} [:code (:name t)]]]
    [:td [:code (:owner t)]]
    [:td [:a {:href (src/file-href (:path t))} [:code (:path t)]]]])
 
@@ -388,8 +429,9 @@
   (when (and summary (pos? (or (:unit_count summary) 0)))
     (let [lang (keyword (:lang summary))
           label (:label summary)
+          name->path (into {} (map (juxt :name :path) (:units summary)))
           ns-mmd (when (#{:clojure :haxe :cpp} lang)
-                   (mermaid-ns-graph (:edges summary)))
+                   (mermaid-ns-graph (:edges summary) name->path))
           pkg-mmd (when (and (#{:python :javascript} lang)
                              (>= (or (:unit_count summary) 0) package-overview-min-units))
                     (mermaid-package-overview (:units summary)))
@@ -450,6 +492,17 @@
                :unit_count (:unit_count summary)
                :type_count (:type_count summary)
                :edge_count (:edge_count summary)}
+     :data {:lang (name lang)
+            :unit_count (:unit_count summary)
+            :type_count (:type_count summary)
+            :edge_count (:edge_count summary)
+            :units (mapv (fn [u] {:name (:name u) :path (:path u)}) (:units summary))
+            :types (mapv (fn [t] {:kind (some-> (:kind t) name)
+                                  :name (:name t)
+                                  :owner (:owner t)
+                                  :path (:path t)})
+                         (:types summary))
+            :edges (mapv #(select-keys % [:from :to]) (:edges summary))}
      :stdout (str "Scanned " (:label summary) ": "
                   (:unit_count summary) " units, "
                   (:type_count summary) " types/classes.")}))
@@ -480,4 +533,6 @@
                           (:types javascript) (:types haxe)))})))
 
 (defn mermaid-ns-graph-summary [summary]
-  (mermaid-ns-graph (:edges summary)))
+  (some-> (mermaid-ns-graph (:edges summary)
+                            (into {} (map (juxt :name :path) (:units summary))))
+          :source))

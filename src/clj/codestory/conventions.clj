@@ -11,6 +11,7 @@
     {:title        \"Standard project layout\"
      :directories [{:path \"src\"    :required true  :description \"…\"}]
      :files       [{:path \"README.md\" :required true :description \"…\"}]
+     :gitignores  [{:pattern \".sunlit/cache/\" :required true :description \"...\"}]
      :formats     [{:name \"issue\"
                     :match \"issues/*.md\"       ; glob
                     :tracker? true               ; also render as list
@@ -195,6 +196,26 @@
   (let [f (try (repo/safe-resolve (:path spec)) (catch Exception _ nil))]
     (check-entry spec (and f (.isFile f)))))
 
+(defn- gitignore-file []
+  (io/file (repo/repo-root) ".gitignore"))
+
+(defn- gitignore-lines
+  "Non-blank, non-comment lines of the repo's .gitignore (trimmed, CRLF-safe).
+  Returns [] when there is no .gitignore."
+  []
+  (if (.isFile (gitignore-file))
+    (->> (slurp (gitignore-file))
+         (#(str/replace % "\r\n" "\n"))
+         (#(str/replace % "\r" "\n"))
+         str/split-lines
+         (map str/trim)
+         (remove #(or (str/blank? %) (str/starts-with? % "#"))))
+    []))
+
+(defn check-gitignore [spec]
+  (let [lines (gitignore-lines)]
+    (check-entry spec (boolean (some #(= % (:pattern spec)) lines)))))
+
 (defn- basename [path]
   (-> (str path) (str/replace "\\" "/") (str/split #"/") last))
 
@@ -316,20 +337,25 @@
    (let [directories (mapv check-directory (:directories tpl))
          files (mapv check-file (:files tpl))
          formats (mapv check-format (:formats tpl))
+         gitignores (mapv check-gitignore (:gitignores tpl))
          report {:title (:title tpl)
                  :directories directories
                  :files files
                  :formats formats
+                 :gitignores gitignores
                  :issues (issues-list formats)
                  :mushroom (mushroom-info)}]
      (assoc report
             :ok? (and (every? #(= :present (:status %)) (filter :required directories))
                       (every? #(= :present (:status %)) (filter :required files))
+                      (every? #(= :present (:status %)) (filter :required gitignores))
                       (every? #(zero? (:invalid_count %)) formats))
             :counts {:directories_required (count (filter :required directories))
-                     :directories_present (count (filter #(= :present (:status %)) directories))
+                     :directories_present (count (filter #(and (:required %) (= :present (:status %))) directories))
                      :files_required (count (filter :required files))
-                     :files_present (count (filter #(= :present (:status %)) files))}))))
+                     :files_present (count (filter #(and (:required %) (= :present (:status %))) files))
+                     :gitignores_required (count (filter :required gitignores))
+                     :gitignores_present (count (filter #(and (:required %) (= :present (:status %))) gitignores))}))))
 
 ;; ---------------------------------------------------------------------------
 ;; HTML rendering
@@ -364,6 +390,17 @@
       [:tr {:class (str "row-" (name (:status e)))}
        [:td.check (check-mark (:present? e))]
        [:td [:a {:href (src/file-href (:path e))} [:code (:path e)]]]
+       [:td (if (:required e) "yes" "optional")]
+       [:td.muted (or (:description e) "")]])]])
+
+(defn- gitignores-table [entries]
+  [:table.conv-table
+   [:thead [:tr [:th "Status"] [:th "Gitignore pattern"] [:th "Required"] [:th "Notes"]]]
+   [:tbody
+    (for [e entries]
+      [:tr {:class (str "row-" (name (:status e)))}
+       [:td.check (check-mark (:present? e))]
+       [:td [:code (:pattern e)]]
        [:td (if (:required e) "yes" "optional")]
        [:td.muted (or (:description e) "")]])]])
 
@@ -440,6 +477,10 @@
     (directories-table (:directories report))
     [:h3 "Files"]
     (files-table (:files report))
+    (when (seq (:gitignores report))
+      (list
+       [:h3 "Gitignore"]
+       (gitignores-table (:gitignores report))))
     (when (seq (:formats report))
       (list
        [:h3 "Document formats"]

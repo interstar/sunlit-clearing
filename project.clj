@@ -15,6 +15,7 @@
                  [markdown-clj "1.12.3"]
                  [hiccup "1.0.5"]
                  [org.babashka/sci "0.8.41"]
+                 [rewrite-clj "1.1.47"]
                  [org.clojure/tools.cli "1.1.230"]
                  [org.clojure/tools.reader "1.4.2"]
                  [com.bhauman/figwheel-main "0.2.18"]]

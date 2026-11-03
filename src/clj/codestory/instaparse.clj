@@ -121,5 +121,9 @@
     {:html html
      :summary {:grammar_count (:grammar_count summary)
                :file_count (:file_count summary)}
+     :data {:grammars (mapv #(select-keys % [:name :kind :path :ns :grammar])
+                            (:grammars summary))
+            :grammar_count (:grammar_count summary)
+            :file_count (:file_count summary)}
      :stdout (str "Instaparse scan: " (:grammar_count summary) " grammars in "
                   (:file_count summary) " files.")}))

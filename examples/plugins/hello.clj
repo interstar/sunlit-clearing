@@ -10,7 +10,9 @@
                     "<h3>" (or (:title params) "Hello plugin") "</h3>"
                     "<p>File: <code>" path "</code></p>"
                     "<p>Repo: <code>" repo-root "</code></p>"
-                    "</div>")})}
+                    "</div>")
+         :text (str "File: " path "\nRepo: " repo-root)
+         :data {:path path :repo-root repo-root}})}
 
 ;; Alternatively call (codestory.plugin/define! {...}) or return a bare fn
 ;; (filename becomes the plugin name; description will be empty).

@@ -142,11 +142,59 @@
         (is (= [:present] (mapv :status (:directories report))))
         (is (:ok? report))))))
 
+(def ^:private gitignore-template
+  {:title "Gitignore"
+   :directories []
+   :files []
+   :formats []
+   :gitignores [{:pattern ".sunlit/cache/" :required true :description "cache"}
+                {:pattern ".sunlit/venv/"  :required true :description "venv"}]})
+
+(deftest check-gitignore-rules-present
+  (with-temp-repo
+    (fn [dir]
+      (spit (io/file dir ".gitignore") "# note\n.sunlit/cache/\n.sunlit/venv/\n")
+      (let [report (conv/check gitignore-template)]
+        (is (= [:present :present] (mapv :status (:gitignores report))))
+        (is (:ok? report))))))
+
+(deftest check-gitignore-rules-missing
+  (with-temp-repo
+    (fn [dir]
+      (spit (io/file dir ".gitignore") ".sunlit/cache/\n")
+      (let [report (conv/check gitignore-template)]
+        (is (= [:present :missing] (mapv :status (:gitignores report))))
+        (is (false? (:ok? report)))))))
+
+(deftest check-gitignore-file-absent
+  (with-temp-repo
+    (fn [dir]
+      (let [report (conv/check gitignore-template)]
+        (is (= [:missing :missing] (mapv :status (:gitignores report))))
+        (is (false? (:ok? report)))))))
+
+(deftest counts-only-required-present
+  ;; Optional directories that happen to exist must not inflate the
+  ;; "N/M required directories" summary numerator.
+  (with-temp-repo
+    (fn [dir]
+      (.mkdirs (io/file dir "src"))
+      (let [tpl {:title "T"
+                 :directories [{:path "src" :required false}
+                               {:path "issues" :required true}]
+                 :files []
+                 :formats []
+                 :gitignores []}
+            report (conv/check tpl)]
+        (is (= 1 (:directories_required (:counts report))))
+        (is (= 0 (:directories_present (:counts report))))))))
+
 (deftest resource-template-loads
   (let [tpl (conv/resource-template)]
     (is (map? tpl))
     (is (seq (:directories tpl)))
     (is (seq (:formats tpl)))
+    (is (seq (:gitignores tpl)))
     (let [fmt (first (:formats tpl))]
       (is (= "issue" (:name fmt)))
       (is (:filename fmt))

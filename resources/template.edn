@@ -1,0 +1,54 @@
+;; Sunlit Clearing conventions template — the single standard for all projects.
+;;
+;; This is the canonical, editable copy. `scripts/install-local` copies it to
+;; ~/.sunlit/template.edn (the location the running app reads first). The same
+;; file is bundled into clearing.jar as a fallback when ~/.sunlit/template.edn
+;; is missing.
+;;
+;; A per-project override is possible at <repo>/.sunlit/template.edn for
+;; emergencies only — prefer keeping one shared standard here.
+
+{:title "Standard project layout"
+
+ :directories
+ [{:path "src"    :required false :description "Primary source tree"}
+  {:path "issues" :required true  :description "Issue tracker (structured markdown)"}
+  {:path "docs"   :required true  :description "Documentation"}
+  {:path "docs/olddocs" :required false :description "Document attic"}
+  {:path "project_lint" :required false :description "Custom Linting"}
+  {:path "docker" :required false :description "Docker file and scripts for building a containerised development environment"}
+  {:path "skills" :required false :description "Skills for agents to work with this project"}
+  
+  
+  
+  ]
+
+ :files
+ [{:path "README.md"    :required true :description "Project readme"}
+  {:path "MUSHROOM.edn" :required true :description "Project metadata"}
+  {:path "projectlint.sh" :required false :description "Runner for project-specific linters"}
+  {:path "project_lint/README.md" :required false :description "Details of project-specific linting scripts"}
+  {:path "docs/architecture.md" :required false :description "Standard architectural overview"}
+  {:path "docs/buildables.md" :required true :description "Things that can be built here. And how."}
+  {:path "docker/Dockerfile" :required false  :description "Dockerfile"}
+  
+  ]
+
+ :gitignores
+ [{:pattern ".sunlit/cache/" :required true :description "Ignore generated plugin/session cache"}
+  {:pattern ".sunlit/venv/"  :required true :description "Ignore private analysis venv"}]
+
+ :formats
+ [{:name "issue"
+   :match "issues/*.md"
+   :filename "^\\d{4}-[A-Za-z0-9._-]+\\.md$"
+   :tracker? true
+   :description "Structured issue document (NNNN-short-slug.md)"
+   :fields
+   [{:key "id"      :required true}
+    {:key "title"   :required true}
+    {:key "status"  :required true :enum ["open" "closed"]}
+    {:key "labels"  :required true :multiple true}
+    {:key "created" :required true :pattern "^\\d{4}-\\d{2}-\\d{2}$"}
+    {:key "closed"  :required false :pattern "^\\d{4}-\\d{2}-\\d{2}$"}
+    {:key "git-bug" :required false}]}]}

@@ -20,9 +20,20 @@
            :plugins nil
            :conventions nil
            :testing nil
+           :lint nil
            :sessions nil
            :session nil
-           :status nil}))
+           :status nil
+           :agents nil}))
+
+(defn- parse-query
+  "\"line=3&sym=foo\" -> {\"line\" \"3\" \"sym\" \"foo\"}"
+  [q]
+  (into {}
+        (for [part (str/split (or q "") #"&")
+              :when (not (str/blank? part))
+              :let [[k v] (str/split part #"=" 2)]]
+          [(js/decodeURIComponent k) (js/decodeURIComponent (or v ""))])))
 
 (defn- parse-hash []
   (let [h (or (.-hash js/location) "")
@@ -33,7 +44,12 @@
       {:page :tree}
 
       (str/starts-with? h "/file/")
-      {:page :file :path (js/decodeURIComponent (subs h 6))}
+      (let [[p q] (str/split (subs h 6) #"\?" 2)
+            qp (parse-query q)]
+        {:page :file
+         :path (js/decodeURIComponent p)
+         :line (not-empty (get qp "line"))
+         :sym (not-empty (get qp "sym"))})
 
       (str/starts-with? h "/dir/")
       {:page :dir :path (js/decodeURIComponent (subs h 5))}
@@ -50,8 +66,14 @@
       (= h "/testing")
       {:page :testing}
 
+      (= h "/lint")
+      {:page :lint}
+
       (= h "/sessions")
       {:page :sessions}
+
+      (= h "/agents")
+      {:page :agents}
 
       (str/starts-with? h "/session/")
       {:page :session :id (js/decodeURIComponent (subs h 9))}
@@ -77,11 +99,16 @@
                 (fn [err]
                   (swap! app-state assoc :tree-error err))))
 
-(defn- load-file! [path]
-  (swap! app-state assoc :file {:loading true :path path})
-  (api/get-json (str "/api/file?path=" (js/encodeURIComponent path))
+(defn- load-file!
+  "Fetch a file (and resolve `sym` to a line range server-side). Reloading the
+  file already on screen keeps it visible instead of flashing a spinner."
+  [path & [sym]]
+  (when-not (= path (get-in @app-state [:file :file :path]))
+    (swap! app-state assoc :file {:loading true :path path}))
+  (api/get-json (str "/api/file?path=" (js/encodeURIComponent path)
+                     (when sym (str "&sym=" (js/encodeURIComponent sym))))
                 (fn [data]
-                  (swap! app-state assoc :file data))
+                  (swap! app-state assoc :file (assoc data :sym sym)))
                 (fn [err]
                   (swap! app-state assoc :file {:ok false :error err :path path}))))
 
@@ -101,7 +128,9 @@
                   (swap! app-state assoc :dir {:ok false :error err :path path}))))
 
 (defn- load-wiki! [name]
-  (swap! app-state assoc :wiki {:loading true :name name})
+  (when-not (and (= name (get-in @app-state [:wiki :name]))
+                 (get-in @app-state [:wiki :ok]))
+    (swap! app-state assoc :wiki {:loading true :name name}))
   (api/get-json (str "/api/pages/" (js/encodeURIComponent name))
                 (fn [data]
                   (swap! app-state assoc :wiki (assoc data :name name)))
@@ -137,6 +166,23 @@
                        on-done
                        (fn [err] (on-done {:ok false :html "" :error err})))))))
 
+(defn- load-lint! []
+  (swap! app-state assoc :lint {:loading true})
+  (let [plugins ["mystyle-clj" "mystyle-py" "mystyle-js"]
+        results (atom {})]
+    (doseq [plugin plugins]
+      (let [on-done (fn [data]
+                      (swap! results assoc plugin data)
+                      (when (= (count @results) (count plugins))
+                        (let [rs @results]
+                          (swap! app-state assoc :lint
+                                 {:ok (every? :ok (map rs plugins))
+                                  :panels (mapv (fn [p] {:plugin p :html (or (:html (get rs p)) "")}) plugins)}))))]
+        (api/post-json (str "/api/plugins/" plugin "/run")
+                       {:params {}}
+                       on-done
+                       (fn [err] (on-done {:ok false :html "" :error err})))))))
+
 (defn- load-sessions! []
   (api/get-json "/api/sessions"
                 (fn [data] (swap! app-state assoc :sessions data))
@@ -162,19 +208,39 @@
                 (fn [data] (swap! app-state assoc :session data))
                 (fn [err] (swap! app-state assoc :session {:ok false :error err}))))
 
+(defn- load-agents! []
+  (swap! app-state assoc :agents {:loading true})
+  (api/get-json "/agents/"
+                (fn [data] (swap! app-state assoc :agents data))
+                (fn [err] (swap! app-state assoc :agents {:ok false :error err}))))
+
+(defn- same-file-loaded?
+  "Moving between lines of the file on screen needs no refetch; a new symbol
+  does (the server resolves it)."
+  [prev-route route]
+  (let [f (:file @app-state)]
+    (and (= :file (:page prev-route))
+         (= (:path prev-route) (:path route))
+         (:ok f)
+         (= (:sym f) (:sym route)))))
+
 (defn sync-route! []
-  (let [route (parse-hash)]
+  (let [prev (:route @app-state)
+        route (parse-hash)]
     (swap! app-state assoc :route route)
     (case (:page route)
       :tree (load-tree!)
-      :file (load-file! (:path route))
+      :file (when-not (same-file-loaded? prev route)
+              (load-file! (:path route) (:sym route)))
       :dir (load-dir! (:path route))
       :wiki (load-wiki! (:name route))
       :plugins (load-plugins!)
       :conventions (load-conventions!)
       :testing (load-testing!)
+      :lint (load-lint!)
       :sessions (load-sessions-busy!)
       :session (load-session! (:id route))
+      :agents (load-agents!)
       nil)))
 
 (defn- toast! [msg]
@@ -222,7 +288,7 @@
 
 (defn- reload-file! []
   (when-let [p (get-in @app-state [:route :path])]
-    (load-file! p)))
+    (load-file! p (get-in @app-state [:route :sym]))))
 
 (defn- reload-wiki! []
   (when-let [n (get-in @app-state [:route :name])]
@@ -242,8 +308,10 @@
         :plugins [views/plugins-page st load-plugins!]
         :conventions [views/conventions-page st load-conventions!]
         :testing [views/testing-page st load-testing!]
+        :lint [views/lint-page st load-lint!]
         :sessions [views/sessions-page st navigate! load-sessions! refresh-sessions!]
         :session [views/session-page st navigate!]
+        :agents [views/agents-page st load-agents!]
         [:p "Unknown page"])]
      (when-let [status (:status st)]
        [:div.status-toast status])]))

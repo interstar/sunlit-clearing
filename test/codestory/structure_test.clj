@@ -104,18 +104,26 @@
           (is (zero? (:edge_count summary))))))))
 
 (deftest mermaid-ns-graph-uses-edges
-  (let [mmd (structure/mermaid-ns-graph [{:from "a.b" :to "a.c"}])]
-    (is (re-find #"flowchart LR" mmd))
-    (is (re-find #"a_b" mmd))
-    (is (re-find #"a_c" mmd))))
+  (let [{:keys [source links]} (structure/mermaid-ns-graph
+                                [{:from "a.b" :to "a.c"}]
+                                {"a.b" "src/a/b.clj" "a.c" "src/a/c.clj"})]
+    (is (re-find #"flowchart LR" source))
+    (is (re-find #"a_b" source))
+    (is (re-find #"a_c" source))
+    (is (= [{:id "a_b" :href "#/file/src%2Fa%2Fb.clj"}
+            {:id "a_c" :href "#/file/src%2Fa%2Fc.clj"}]
+           links))))
 
 (deftest mermaid-class-diagram-avoids-html-stereotypes
-  (let [mmd (structure/mermaid-class-diagram
-             [{:name "Dog" :kind "class" :bases ["Animal"]}
-              {:name "Animal" :kind "class" :bases []}])]
-    (is (re-find #"classDiagram" mmd))
-    (is (re-find #"Dog" mmd))
-    (is (not (re-find #"<<" mmd)))))
+  (let [{:keys [source links]} (structure/mermaid-class-diagram
+                                [{:name "Dog" :kind "class" :bases ["Animal"] :path "a.clj"}
+                                 {:name "Animal" :kind "class" :bases [] :path "b.clj"}])]
+    (is (re-find #"classDiagram" source))
+    (is (re-find #"Dog" source))
+    (is (not (re-find #"<<" source)))
+    (is (= [{:id "Animal" :href "#/file/b.clj"}
+            {:id "Dog" :href "#/file/a.clj"}]
+           links))))
 
 (deftest mermaid-class-diagram-skips-orphan-dump
   (let [types (mapv (fn [i] {:name (str "C" i) :kind "class" :bases []}) (range 40))
@@ -130,13 +138,17 @@
     (is (nil? mmd))))
 
 (deftest mermaid-package-overview-groups-modules
-  (let [mmd (structure/mermaid-package-overview
-             [{:name "src.app.panel" :classes [{:name "A"} {:name "B"}]}
-              {:name "src.app.tabs" :classes [{:name "C"}]}
-              {:name "src.domain.model" :classes [{:name "D"}]}])]
-    (is (re-find #"flowchart TB" mmd))
-    (is (re-find #"src\.app" mmd))
-    (is (re-find #"2 classes" mmd))))
+  (let [{:keys [source links]} (structure/mermaid-package-overview
+                                [{:name "src.app.panel" :classes [{:name "A"} {:name "B"}]}
+                                 {:name "src.app.tabs" :classes [{:name "C"}]}
+                                 {:name "src.domain.model" :classes [{:name "D"}]}])]
+    (is (re-find #"flowchart TB" source))
+    (is (re-find #"src\.app" source))
+    (is (re-find #"2 classes" source))
+    (is (= [{:id "src_app_panel" :href "#/dir/src%2Fapp%2Fpanel"}
+            {:id "src_app_tabs" :href "#/dir/src%2Fapp%2Ftabs"}
+            {:id "src_domain_model" :href "#/dir/src%2Fdomain%2Fmodel"}]
+           links))))
 
 (deftest html-lang-escapes-mermaid
   (let [html (structure/->html-lang
@@ -157,5 +169,8 @@
     (is (re-find #"structure-lang-box" html))
     (is (re-find #"pre class=\"mermaid\"" html))
     (is (re-find #"Packages" html))
+    (is (re-find #"data-links=" html))
+    ;; Class/type names are hyperlinks to their defining file.
+    (is (re-find #"<a href=\"#/file/a\.py\"><code>Dog</code></a>" html))
     ;; Must be entity-escaped inside the pre so << never becomes an HTML tag
-    (is (not (re-find #"<pre class=\"mermaid\">[^<]*<<" html)))))
+    (is (not (re-find #"<pre class=\"mermaid\"[^>]*>[^<]*<<" html)))))

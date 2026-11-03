@@ -144,5 +144,9 @@
     {:html html
      :summary {:schema_count (:schema_count summary)
                :file_count (:file_count summary)}
+     :data {:schemas (mapv #(select-keys % [:name :kind :path :ns :source])
+                           (:schemas summary))
+            :schema_count (:schema_count summary)
+            :file_count (:file_count summary)}
      :stdout (str "Malli scan: " (:schema_count summary) " schemas in "
                   (:file_count summary) " files.")}))
