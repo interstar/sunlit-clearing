@@ -1,0 +1,20 @@
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+target/
+.nrepl-port
+.lein-*
+pom.xml
+.eastwood
+.clj-kondo/.cache
+.cpcache/
+resources/public/js/compiled/
+*.jar
+.DS_Store
+# Sunlit Clearing sidecar: track authored content, ignore generated bits.
+.sunlit/cache/
+.sunlit/venv/
+.eyeball/
+__pycache__/
+*.py[cod]
