@@ -1,6 +1,6 @@
-(defproject codestory "0.1.0-SNAPSHOT"
+(defproject sunlit "0.1.0-SNAPSHOT"
   :description "Sunlit Clearing — local wiki-like explorer for code repositories"
-  :url "https://github.com/future-office-labs/codestory"
+  :url "https://github.com/future-office-labs/sunlit"
   :license {:name "MIT"}
   :dependencies [[org.clojure/clojure "1.11.4"]
                  [org.clojure/clojurescript "1.11.132"]
@@ -24,7 +24,7 @@
   :source-paths ["src/clj"]
   :test-paths ["test"]
   :resource-paths ["resources"]
-  :main ^:skip-aot codestory.core
+  :main ^:skip-aot sunlit.core
   :target-path "target/%s"
   :clean-targets ^{:protect false} ["resources/public/js/compiled"
                                     :target-path]
@@ -32,7 +32,7 @@
   {:builds
    [{:id "dev"
      :source-paths ["src/cljs"]
-     :compiler {:main codestory.client
+     :compiler {:main sunlit.client
                 :output-to "resources/public/js/compiled/app.js"
                 :output-dir "resources/public/js/compiled/out"
                 :asset-path "/js/compiled/out"
@@ -40,7 +40,7 @@
                 :pretty-print true}}
     {:id "prod"
      :source-paths ["src/cljs"]
-     :compiler {:main codestory.client
+     :compiler {:main sunlit.client
                 :output-to "resources/public/js/compiled/app.js"
                 :optimizations :advanced
                 :pretty-print false
@@ -55,4 +55,4 @@
   {"fig" ["run" "-m" "figwheel.main" "--" "-b" "dev" "-r"]
    "cljs" ["cljsbuild" "once" "dev"]
    "cljs-prod" ["cljsbuild" "once" "prod"]
-   "coverage" ["cloverage" "--ns-exclude-regex" "codestory\\.client.*"]})
+   "coverage" ["cloverage" "--ns-exclude-regex" "sunlit\\.client.*"]})

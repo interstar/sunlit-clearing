@@ -14,5 +14,5 @@
          :text (str "File: " path "\nRepo: " repo-root)
          :data {:path path :repo-root repo-root}})}
 
-;; Alternatively call (codestory.plugin/define! {...}) or return a bare fn
+;; Alternatively call (sunlit.plugin/define! {...}) or return a bare fn
 ;; (filename becomes the plugin name; description will be empty).

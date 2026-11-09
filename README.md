@@ -8,9 +8,6 @@ This is a greenfield Clojure / ClojureScript (Leiningen) prototype. The earlier
 Python LLM analyzer lives in `legacy/`. Design notes for the broader product are
 in `next.md`.
 
-Internal Clojure namespaces still use the historical `codestory.*` prefix; the
-product name is **Sunlit Clearing**, and install artifacts use `clearing` /
-`sunlit`.
 
 ## V1 features
 
@@ -48,7 +45,7 @@ product name is **Sunlit Clearing**, and install artifacts use `clearing` /
 ./go.sh
 # or:
 lein cljs
-lein run -m codestory.core -- --port 4567 /path/to/repo
+lein run -m sunlit.core -- --port 4567 /path/to/repo
 ```
 
 Open http://localhost:4567/
@@ -58,7 +55,7 @@ Open http://localhost:4567/
 ```bash
 lein fig
 # in another terminal:
-lein run -m codestory.core -- --port 4567 .
+lein run -m sunlit.core -- --port 4567 .
 ```
 
 ## Install (uberjar)
@@ -87,8 +84,8 @@ Use `./scripts/install-local --skip-clean` for a faster incremental rebuild.
 
 ## Plugins
 
-**Built-in** — one namespace/file each under `src/clj/codestory/plugins/`,
-registered from `codestory.plugins`. Each exports a `plugin` map:
+**Built-in** — one namespace/file each under `src/clj/sunlit/plugins/`,
+registered from `sunlit.plugins`. Each exports a `plugin` map:
 
 ```clojure
 {:name "leiningen"
@@ -137,7 +134,7 @@ interpreter in use.
 
 A location is `path#anchor`, where the anchor is a line (`42`, `L42`), a range
 (`40-60`) or a symbol. Symbols resolve heuristically per language
-(`codestory.locate`, no parsing): the least-indented matching definition wins,
+(`sunlit.locate`, no parsing): the least-indented matching definition wins,
 then the first whole-word mention, then the first literal mention. Qualified
 names (`Shape.area`, `Shape::area`) look inside the container's block; free
 text such as `defmethod area :circle` works through the literal fallback.
@@ -246,7 +243,7 @@ whose coordinates are not in `:dims`.
 ### Check code sandbox
 
 `:check` code runs in SCI with no Java interop and no `slurp`/`spit`. It
-sees the repo only through read-only helpers (`codestory.sandbox`); the
+sees the repo only through read-only helpers (`sunlit.sandbox`); the
 `.sunlit/` sidecar and ignored directories are invisible to it:
 
 | Helper | Returns |
@@ -275,7 +272,7 @@ so its thread is abandoned.
 Editing cells (✎ or double-click) and changing the axes in the grid UI rewrite
 the fence's own EDN in the sidecar page/annotation. That is the general
 rule: a plugin with an `:update (fn [params action] new-params)` may rewrite
-its own fence (`POST /api/fence`, `codestory.fences`), and nothing in the
+its own fence (`POST /api/fence`, `sunlit.fences`), and nothing in the
 watched repository is ever modified. Only the entries that changed are
 rewritten (rewrite-clj), so comments, layout and inline `:check` code
 elsewhere in the fence are kept.
@@ -381,7 +378,7 @@ Sunlit Clearing shells out to `scripts/sessions_bridge.py`, which uses
 `eyeball_shared` from eyeball_kid. Prefer the shared venv:
 
 ```bash
-export CODESTORY_PYTHON=~/.main_python_venv/bin/python
+export SUNLIT_PYTHON=~/.main_python_venv/bin/python
 ```
 
 If eyeball is not installed, the Sessions page shows an error instead of failing the whole app.

@@ -27,8 +27,8 @@ Alternatives:
 
 - Return a bare function as the last form — the filename becomes the plugin
   name and the description is empty.
-- Call `(codestory.plugin/define! {...})` or
-  `(codestory.plugin/register! "name" fn)` to register imperatively.
+- Call `(sunlit.plugin/define! {...})` or
+  `(sunlit.plugin/register! "name" fn)` to register imperatively.
 
 ## The plugin map
 
@@ -77,23 +77,23 @@ returns them so agents get structured output without parsing HTML.
 
 ## Host functions available in the sandbox
 
-Call these through the `codestory.plugin` namespace:
+Call these through the `sunlit.plugin` namespace:
 
-- `(codestory.plugin/repo-root)` → absolute watched repo path string.
-- `(codestory.plugin/read-file rel)` → file map
+- `(sunlit.plugin/repo-root)` → absolute watched repo path string.
+- `(sunlit.plugin/read-file rel)` → file map
   `{:path :name :size :text? :language :content}`, or throws when not a file.
-- `(codestory.plugin/slurp-repo rel)` → the file's text content string.
-- `(codestory.plugin/git-available?)` → true when git is on PATH and the repo
+- `(sunlit.plugin/slurp-repo rel)` → the file's text content string.
+- `(sunlit.plugin/git-available?)` → true when git is on PATH and the repo
   is a work tree.
-- `(codestory.plugin/tracked? rel)` → true when the file or directory is tracked
+- `(sunlit.plugin/tracked? rel)` → true when the file or directory is tracked
   in git (a directory counts as tracked if it contains a tracked file).
-- `(codestory.plugin/git-status rel)` → `:tracked`, `:untracked`, `:ignored`,
+- `(sunlit.plugin/git-status rel)` → `:tracked`, `:untracked`, `:ignored`,
   or nil.
-- `(codestory.plugin/define! m)` — register a plugin map imperatively.
-- `(codestory.plugin/register! name-or-map [fn])` — register a bare fn (or map)
+- `(sunlit.plugin/define! m)` — register a plugin map imperatively.
+- `(sunlit.plugin/register! name-or-map [fn])` — register a bare fn (or map)
   under a name.
 
-The sandbox is intentionally small: only `codestory.plugin` and
+The sandbox is intentionally small: only `sunlit.plugin` and
 `java.lang.String` are exposed. It does **not** include `clojure.java.shell`,
 hiccup, or the job cache. Use the host functions to read files and ask about
 git; do the rest in plain Clojure.
@@ -117,7 +117,7 @@ git; do the rest in plain Clojure.
 
 ## Long-running plugins (advanced)
 
-Built-in long-running plugins use the job cache (`codestory.jobs`), which is
+Built-in long-running plugins use the job cache (`sunlit.jobs`), which is
 not available in the SCI sandbox. A custom plugin that needs to run a slow
 command should do it synchronously in `:run` (the browser waits), or ship its
 own polling logic in returned HTML. In practice most project plugins are
@@ -129,12 +129,12 @@ synchronous `:run` handlers.
 {:name "file-status"
  :description "Shows whether the current file is tracked in git."
  :run (fn [{:keys [path]}]
-        {:html (str "<p>" path " → " (codestory.plugin/git-status path) "</p>")})}
+        {:html (str "<p>" path " → " (sunlit.plugin/git-status path) "</p>")})}
 ```
 
 ## Reference
 
-- Built-in plugins live in `src/clj/codestory/plugins/*.clj` in the Sunlit
+- Built-in plugins live in `src/clj/sunlit/plugins/*.clj` in the Sunlit
   repo; they show how `:run`/`:start!` and the job cache work.
 - A complete example project plugin ships at `examples/plugins/hello.clj` in
   the Sunlit repo.
