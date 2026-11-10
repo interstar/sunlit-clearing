@@ -6,8 +6,7 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [clojure.tools.reader :as tr]
-   [clojure.tools.reader.reader-types :as rt]
-   [clojure.walk :as walk]))
+   [clojure.tools.reader.reader-types :as rt]))
 
 (defn- usage []
   (println "Usage: bb mystyle_lint.clj path/to/src"))
@@ -140,16 +139,16 @@
       (seq? (first fdecl)) (map rest fdecl)
       :else [])))
 
+(defn- subforms
+  "`form` and every form nested inside it, depth-first (pre-order)."
+  [form]
+  (tree-seq coll? seq form))
+
 (defn- find-atom-refs [form]
-  (let [hits (atom [])]
-    (walk/prewalk
-     (fn [x]
-       (when (atom-or-ref? x)
-         (let [{:keys [line column]} (meta x)]
-           (swap! hits conj {:line line :col column :form x})))
-       x)
-     form)
-    @hits))
+  (for [x (subforms form)
+        :when (atom-or-ref? x)
+        :let [{:keys [line column]} (meta x)]]
+    {:line line :col column :form x}))
 
 (defn- let-form? [x]
   (and (seq? x)
@@ -189,18 +188,13 @@
       :else [])))
 
 (defn- find-inner-fns [text starts form]
-  (let [hits (atom [])]
-    (walk/prewalk
-     (fn [x]
-       (when (let-form? x)
-         (doseq [b (binding-forms x)]
-           (let [{:keys [line column]} (meta b)
-                 end-line (read-form-end-line text starts b)]
-             (when (and line end-line (> (inc (- end-line line)) 2))
-               (swap! hits conj {:line line :col column :end-line end-line})))))
-       x)
-     form)
-    @hits))
+  (for [x (subforms form)
+        :when (let-form? x)
+        b (binding-forms x)
+        :let [{:keys [line column]} (meta b)
+              end-line (read-form-end-line text starts b)]
+        :when (and line end-line (> (inc (- end-line line)) 2))]
+    {:line line :col column :end-line end-line}))
 
 (defn- symbol-named? [x names]
   (and (symbol? x) (contains? names (name x))))
@@ -268,84 +262,76 @@
                       snippet (default-label (last x)))}))
 
 (defn- find-fail-soft-inputs [path text starts form]
-  (let [hits (atom [])]
-    (walk/prewalk
-     (fn [x]
-       (when (empty-fallback-form? x)
-         (swap! hits conj (fail-soft-warning path text starts x)))
-       x)
-     form)
-    @hits))
+  (for [x (subforms form)
+        :when (empty-fallback-form? x)]
+    (fail-soft-warning path text starts x)))
 
 (declare collect-near-dup-forms)
 
-(defn- file-warnings [path]
-  (let [raw (slurp path)
-        text (normalize-text raw)
-        parse-text (neutralize-tagged-literals text)
-        has-reader-conditional (contains-actionable-reader-conditional? text)
-        starts (line-starts parse-text)
-        lines (max 1 (count (str/split-lines text)))
-        {:keys [forms parse-error]} (safe-read-top-level-forms parse-text)
-        warnings (atom [])]
-    (when parse-error
-      (swap! warnings conj {:file path
-                            :line 1
-                            :col 1
-                            :level "WARN"
-                            :message (format "Parser fallback used (%s); structural checks were skipped for this file."
-                                             (.getMessage parse-error))}))
+(defn- warning
+  "A finding at `line`:`col` of `path` (missing positions default to 1)."
+  [path line col level message]
+  {:file path :line (or line 1) :col (or col 1) :level level :message message})
+
+(defn- parse-error-warnings [path parse-error]
+  (when parse-error
+    [(warning path 1 1 "WARN"
+              (format "Parser fallback used (%s); structural checks were skipped for this file."
+                      (.getMessage parse-error)))]))
+
+(defn- file-size-warnings [path text]
+  (let [lines (max 1 (count (str/split-lines text)))]
     (when (> lines 600)
-      (swap! warnings conj {:file path
-                            :line 1
-                            :col 1
-                            :level "WARN"
-                            :message (format "File has %d lines; consider splitting it." lines)}))
-    (let [global-uses (mapcat (fn [{:keys [form]}]
-                                (when-not (defn-form? form)
-                                  (find-atom-refs form)))
-                              forms)]
-      (when (seq global-uses)
-        (let [global-count (count global-uses)]
-          (doseq [{:keys [line col]} global-uses]
-            (swap! warnings conj {:file path
-                                  :line (or line 1)
-                                  :col (or col 1)
-                                  :level "WARN"
-                                  :message (if (= global-count 1)
-                                             "Global atom/ref usage; a single global atom can be OK, but prefer stateless solutions."
-                                             "Multiple global atoms/refs found; prefer a single global atom or stateless design.")})))))
-    (doseq [{:keys [form]} forms
-            warning (find-fail-soft-inputs path parse-text starts form)]
-      (swap! warnings conj warning))
-    (doseq [{:keys [form start-line end-line]} forms
-            :when (defn-form? form)]
-      (let [fname (defn-name form)
-            line-count (when (and start-line end-line) (inc (- end-line start-line)))]
-        (when (and line-count (> line-count 30))
-          (swap! warnings conj {:file path
-                                :line (or start-line 1)
-                                :col 1
-                                :level (if (> line-count 50) "HARD" "WARN")
-                                :message (format "Function %s is %d lines (ends at line %d); consider refactoring."
-                                                 fname line-count (or end-line start-line))}))
-        (doseq [body (defn-bodies form)]
-          (doseq [{:keys [line col]} (find-atom-refs body)]
-            (swap! warnings conj {:file path
-                                  :line (or line 1)
-                                  :col (or col 1)
-                                  :level "WARN"
-                                  :message (format "Local atom/ref usage in %s; prefer stateless solutions unless necessary." fname)}))
-          (doseq [{:keys [line col end-line]} (find-inner-fns parse-text starts body)]
-            (swap! warnings conj {:file path
-                                  :line (or line 1)
-                                  :col (or col 1)
-                                  :level "HARD"
-                                  :message (format "Inner function in let inside %s spans >2 lines (ends at line %d); hoist it out."
-                                                   fname end-line)})))))
-    {:warnings @warnings
-     :forms (collect-near-dup-forms path parse-text (line-starts parse-text) forms)
-     :has-reader-conditional has-reader-conditional}))
+      [(warning path 1 1 "WARN" (format "File has %d lines; consider splitting it." lines))])))
+
+(defn- global-atom-warnings [path forms]
+  (let [uses (mapcat #(when-not (defn-form? (:form %)) (find-atom-refs (:form %))) forms)
+        message (if (= 1 (count uses))
+                  "Global atom/ref usage; a single global atom can be OK, but prefer stateless solutions."
+                  "Multiple global atoms/refs found; prefer a single global atom or stateless design.")]
+    (for [{:keys [line col]} uses]
+      (warning path line col "WARN" message))))
+
+(defn- defn-length-warnings [path {:keys [form start-line end-line]}]
+  (let [line-count (when (and start-line end-line) (inc (- end-line start-line)))]
+    (when (and line-count (> line-count 30))
+      [(warning path start-line 1 (if (> line-count 50) "HARD" "WARN")
+                (format "Function %s is %d lines (ends at line %d); consider refactoring."
+                        (defn-name form) line-count (or end-line start-line)))])))
+
+(defn- defn-body-warnings
+  "Local atoms, then over-long inner fns, for each body of a defn `form`."
+  [path text starts form]
+  (let [fname (defn-name form)]
+    (mapcat
+     (fn [body]
+       (concat
+        (for [{:keys [line col]} (find-atom-refs body)]
+          (warning path line col "WARN"
+                   (format "Local atom/ref usage in %s; prefer stateless solutions unless necessary." fname)))
+        (for [{:keys [line col end-line]} (find-inner-fns text starts body)]
+          (warning path line col "HARD"
+                   (format "Inner function in let inside %s spans >2 lines (ends at line %d); hoist it out."
+                           fname end-line)))))
+     (defn-bodies form))))
+
+(defn- file-warnings [path]
+  (let [text (normalize-text (slurp path))
+        parse-text (neutralize-tagged-literals text)
+        starts (line-starts parse-text)
+        {:keys [forms parse-error]} (safe-read-top-level-forms parse-text)
+        defns (filter #(defn-form? (:form %)) forms)]
+    {:warnings (concat
+                (parse-error-warnings path parse-error)
+                (file-size-warnings path text)
+                (global-atom-warnings path forms)
+                (mapcat #(find-fail-soft-inputs path parse-text starts (:form %)) forms)
+                (mapcat (fn [d]
+                          (concat (defn-length-warnings path d)
+                                  (defn-body-warnings path parse-text starts (:form d))))
+                        defns))
+     :forms (collect-near-dup-forms path parse-text starts forms)
+     :has-reader-conditional (contains-actionable-reader-conditional? text)}))
 
 (defn- clj-source-file? [^java.io.File f]
   (let [name (.getName f)]
@@ -361,18 +347,20 @@
 (defn- skip-dir? [^java.io.File f]
   (and (.isDirectory f) (contains? skip-dir-names (.getName f))))
 
-(defn- collect-files [root]
-  (letfn [(walk [^java.io.File dir]
-            (when (and dir (.isDirectory dir))
-              (mapcat (fn [^java.io.File f]
-                        (cond
-                          (.isDirectory f)
-                          (if (skip-dir? f) [] (walk f))
+(defn- source-files-under
+  "Clojure source files below `dir`, not descending into skipped directories."
+  [^java.io.File dir]
+  (mapcat (fn [^java.io.File f]
+            (cond
+              (.isDirectory f) (if (skip-dir? f) [] (source-files-under f))
+              (clj-source-file? f) [f]
+              :else []))
+          (.listFiles dir)))
 
-                          (clj-source-file? f) [f]
-                          :else []))
-                      (.listFiles dir))))]
-    (walk (io/file root))))
+(defn- collect-files [root]
+  (let [dir (io/file root)]
+    (when (.isDirectory dir)
+      (source-files-under dir))))
 
 (defn- format-warning [{:keys [file line col level message]}]
   (format "%s:%d:%d [%s] %s" file line col level message))
@@ -391,55 +379,37 @@
 (defn- sorted-set-elems [s]
   (sort-by pr-str s))
 
+(declare tokens-of)
+
+(defn- bracketed
+  "`open`, the tokens of each element in `xs` (only the first in head
+  position when `head-first?`), then `close`."
+  [open close xs head-first?]
+  (concat [open]
+          (mapcat tokens-of xs (cons head-first? (repeat false)))
+          [close]))
+
+(defn- tokens-of
+  "Shape tokens for `x`: literals collapse to their type, symbols keep their
+  name only in head position, maps and sets are put in a stable order."
+  [x head?]
+  (cond
+    (list? x) (bracketed "(" ")" x true)
+    (vector? x) (bracketed "[" "]" x false)
+    (map? x) (bracketed "{" "}" (mapcat identity (sorted-map-entries x)) false)
+    (set? x) (bracketed "#{" "}" (sorted-set-elems x) false)
+    (symbol? x) [(if head? (str "SYM:" (normalize-name x)) "SYM")]
+    (keyword? x) [(str "KW:" (normalize-name x))]
+    (string? x) ["STR"]
+    (number? x) ["NUM"]
+    (char? x) ["CHAR"]
+    (true? x) ["TRUE"]
+    (false? x) ["FALSE"]
+    (nil? x) ["NIL"]
+    :else ["LIT"]))
+
 (defn- form->tokens [form]
-  (let [tokens (transient [])]
-    (letfn [(emit [x head?]
-              (cond
-                (list? x)
-                (do
-                  (conj! tokens "(")
-                  (when (seq x)
-                    (emit (first x) true)
-                    (doseq [e (rest x)] (emit e false)))
-                  (conj! tokens ")"))
-
-                (vector? x)
-                (do
-                  (conj! tokens "[")
-                  (doseq [e x] (emit e false))
-                  (conj! tokens "]"))
-
-                (map? x)
-                (do
-                  (conj! tokens "{")
-                  (doseq [[k v] (sorted-map-entries x)]
-                    (emit k false)
-                    (emit v false))
-                  (conj! tokens "}"))
-
-                (set? x)
-                (do
-                  (conj! tokens "#{")
-                  (doseq [e (sorted-set-elems x)] (emit e false))
-                  (conj! tokens "}"))
-
-                (symbol? x)
-                (conj! tokens (if head?
-                                (str "SYM:" (normalize-name x))
-                                "SYM"))
-
-                (keyword? x)
-                (conj! tokens (str "KW:" (normalize-name x)))
-
-                (string? x) (conj! tokens "STR")
-                (number? x) (conj! tokens "NUM")
-                (char? x) (conj! tokens "CHAR")
-                (true? x) (conj! tokens "TRUE")
-                (false? x) (conj! tokens "FALSE")
-                (nil? x) (conj! tokens "NIL")
-                :else (conj! tokens "LIT")))]
-      (emit form false)
-      (persistent! tokens))))
+  (vec (tokens-of form false)))
 
 (defn- shingle-set [tokens k]
   (let [cnt (count tokens)]
@@ -463,59 +433,46 @@
         maxv (max a b)]
     (>= (/ (double minv) (double maxv)) 0.75)))
 
+(defn- near-dup-candidate
+  "A near-dup comparison entry for form `x`, or nil when it has no position
+  or is too small to be worth comparing."
+  [path text starts x]
+  (when-let [{:keys [line column]} (meta x)]
+    (let [tokens (form->tokens x)]
+      (when (and line (>= (count tokens) near-dup-min-tokens))
+        {:file path
+         :line line
+         :col (or column 1)
+         :end-line (read-form-end-line text starts x)
+         :tokens tokens
+         :token-count (count tokens)}))))
+
+(defn- near-dup-subjects
+  "Forms worth comparing in one top-level `form`: the form itself when it is
+  a def/defn, then every collection bound in a let inside it."
+  [form]
+  (concat (when (or (defn-form? form) (def-form? form)) [form])
+          (for [x (subforms form)
+                :when (let-form? x)
+                b (let-binding-forms x)
+                :when (coll? b)]
+            b)))
+
 (defn- collect-near-dup-forms [path text starts forms]
-  (let [hits (atom [])]
-    (letfn [(add-form! [x]
-              (when-let [{:keys [line column]} (meta x)]
-                (let [end-line (read-form-end-line text starts x)
-                      tokens (form->tokens x)]
-                  (when (and line (>= (count tokens) near-dup-min-tokens))
-                    (swap! hits conj {:file path
-                                      :line line
-                                      :col (or column 1)
-                                      :end-line end-line
-                                      :tokens tokens
-                                      :token-count (count tokens)})))))]
-      (doseq [{:keys [form]} forms]
-        (when (or (defn-form? form) (def-form? form))
-          (add-form! form))
-        (walk/prewalk
-         (fn [x]
-           (when (let-form? x)
-             (doseq [b (let-binding-forms x)]
-               (when (coll? b)
-                 (add-form! b))))
-           x)
-         form)))
-    @hits))
+  (keep #(near-dup-candidate path text starts %)
+        (mapcat (comp near-dup-subjects :form) forms)))
 
 (defn- near-dup-warnings [forms]
-  (let [formsv (vec forms)
-        cnt (count formsv)
-        warnings (atom [])]
-    (loop [i 0]
-      (when (< i cnt)
-        (let [a (nth formsv i)
-              ta (:token-count a)
-              sa (shingle-set (:tokens a) near-dup-shingle-size)]
-          (loop [j (inc i)]
-            (when (< j cnt)
-              (let [b (nth formsv j)
-                    tb (:token-count b)]
-                (when (size-compatible? ta tb)
-                  (let [sb (shingle-set (:tokens b) near-dup-shingle-size)
-                        sim (jaccard sa sb)]
-                    (when (>= sim near-dup-similarity)
-                      (swap! warnings conj
-                             {:file (:file a)
-                              :line (:line a)
-                              :col (:col a)
-                              :level "WARN"
-                              :message (format "Near-duplicate s-exp (%.2f similarity) also at %s:%d:%d."
-                                               sim (:file b) (:line b) (:col b))}))))
-                (recur (inc j)))))
-          (recur (inc i)))))
-    @warnings))
+  (let [formsv (mapv #(assoc % :shingles (shingle-set (:tokens %) near-dup-shingle-size))
+                     forms)]
+    (for [[i a] (map-indexed vector formsv)
+          b (subvec formsv (inc i))
+          :when (size-compatible? (:token-count a) (:token-count b))
+          :let [sim (jaccard (:shingles a) (:shingles b))]
+          :when (>= sim near-dup-similarity)]
+      (warning (:file a) (:line a) (:col a) "WARN"
+               (format "Near-duplicate s-exp (%.2f similarity) also at %s:%d:%d."
+                       sim (:file b) (:line b) (:col b))))))
 
 (defn -main [& args]
   (let [root (first args)]
