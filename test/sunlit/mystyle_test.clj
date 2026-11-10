@@ -51,6 +51,33 @@
     (is (str/includes? html "fail-soft-input"))
     (is (str/includes? html "mystyle-hard"))))
 
+(deftest findings-html-shows-category-code-and-source
+  (let [html (mystyle/findings-html
+              [{:file "src/a.clj" :line 7 :col 3 :level "WARN"
+                :message "fail-soft-input: `(or (< a b) \"\")` silently falls back to \"\""
+                :source "  (let [x (or (< a b) \"\")]"}])]
+    (testing "category is split out of the message"
+      (is (str/includes? html "<span class=\"mystyle-cat\">fail-soft-input</span>")))
+    (testing "backticked code is escaped inside <code>"
+      (is (str/includes? html "<code>(or (&lt; a b) &quot;&quot;)</code>")))
+    (testing "source line is shown, escaped"
+      (is (str/includes? html "<pre class=\"mystyle-src\">(let [x (or (&lt; a b)")))
+    (testing "location links to the line"
+      (is (str/includes? html "#/file/src%2Fa.clj?line=7")))))
+
+(deftest attach-source-reads-the-flagged-line
+  (with-temp-repo
+    (fn [dir]
+      (let [f (io/file dir "src" "foo.clj")]
+        (io/make-parents f)
+        (spit f "(ns foo)\n(defn g [m]\n  (or (:a m) \"\"))\n")
+        (is (= [{:file "src/foo.clj" :line 3 :col 3 :source "  (or (:a m) \"\"))"}
+                {:file "src/foo.clj" :line 99 :col 1}
+                {:file "src/missing.clj" :line 1 :col 1}]
+               (mystyle/attach-source [{:file "src/foo.clj" :line 3 :col 3}
+                                       {:file "src/foo.clj" :line 99 :col 1}
+                                       {:file "src/missing.clj" :line 1 :col 1}])))))))
+
 (deftest summary-html-headline
   (is (nil? (mystyle/summary-html {:count 0})))
   (let [html (mystyle/summary-html {:count 5 :warn 2 :hard 1 :info 1 :error 1})]

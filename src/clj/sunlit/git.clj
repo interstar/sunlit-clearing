@@ -9,11 +9,11 @@
 (def ^:private cache-ttl-ms 5000)
 
 (defn- run-git [& args]
-  (let [{:keys [exit out]}
+  (let [{:keys [exit out err]}
         (apply sh/sh (concat ["git"] (mapv str args)
                              [:dir (str (repo/repo-root))
                               :env (-> (into {} (System/getenv)) (dissoc "CLASSPATH"))]))]
-    {:ok (zero? exit) :out (str out)}))
+    {:ok (zero? exit) :out (str out) :err (str err)}))
 
 (defn available?
   "True when git is on PATH and the watched repo is a git work tree."
@@ -21,19 +21,30 @@
   (let [{:keys [ok out]} (run-git "rev-parse" "--is-inside-work-tree")]
     (and ok (str/includes? (str/trim out) "true"))))
 
-(defn- git-lines [& args]
-  (let [{:keys [ok out]} (apply run-git args)]
-    (when ok
+(defn- git-lines
+  "Set of output lines of a git command, or nil (after logging why) when it fails."
+  [& args]
+  (let [{:keys [ok out err]} (apply run-git args)]
+    (if ok
       (->> (str/split-lines out)
            (map str/trim)
            (remove str/blank?)
-           set))))
+           set)
+      (binding [*out* *err*]
+        (println (str "sunlit.git: `git " (str/join " " args) "` failed: " (str/trim err)))
+        nil))))
 
-(defn- fresh-status-map []
+(defn- fresh-status-map
+  "Tracked/untracked/ignored path sets, or nil when git is unavailable or any
+  listing fails. A failed listing must not read as \"no files tracked\", which
+  would mark every file untracked; nil means status unknown."
+  []
   (when (available?)
-    {:tracked (or (git-lines "ls-files") #{})
-     :untracked (or (git-lines "ls-files" "--others" "--exclude-standard") #{})
-     :ignored (or (git-lines "ls-files" "--others" "-i" "--exclude-standard") #{})}))
+    (let [m {:tracked (git-lines "ls-files")
+             :untracked (git-lines "ls-files" "--others" "--exclude-standard")
+             :ignored (git-lines "ls-files" "--others" "-i" "--exclude-standard")}]
+      (when (every? some? (vals m))
+        m))))
 
 (defn- status-map []
   (let [root (str (repo/repo-root))

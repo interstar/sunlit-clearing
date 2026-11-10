@@ -40,6 +40,25 @@
         (is (false? (:long_running r)))
         (is (= "ok" (:status r)))))))
 
+(deftest plugin-result-failed-run
+  (with-repo
+    (fn [_]
+      (testing "a plugin that throws"
+        (plugins/register! {:name "boom" :run (fn [_] (throw (ex-info "kaboom" {})))})
+        (let [r (agents/plugin-result "boom" {})]
+          (is (false? (:ok r)))
+          (is (= "error" (:status r)))
+          (is (= "kaboom" (:error r)))))
+      (testing "a plugin that returns :ok false"
+        (plugins/register! {:name "refuses" :run (fn [_] {:ok false :error "bad params"})})
+        (let [r (agents/plugin-result "refuses" {})]
+          (is (false? (:ok r)))
+          (is (= "error" (:status r)))
+          (is (= "bad params" (:error r)))))
+      (testing "a failed run overrides a status the plugin supplied"
+        (plugins/register! {:name "mixed" :run (fn [_] {:ok false :status "ok"})})
+        (is (= "error" (:status (agents/plugin-result "mixed" {}))))))))
+
 (deftest plugin-fences-extraction
   (is (= [{:name "structure" :params {}}]
          (render/plugin-fences "```plugin structure\n{}\n```")))

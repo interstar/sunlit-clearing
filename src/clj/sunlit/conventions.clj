@@ -34,24 +34,34 @@
 (defn repo-template-file []
   (repo/sidecar-file "template.edn"))
 
-(defn- read-template-file [f]
-  (when (and f (.isFile f))
-    (try
-      (let [data (edn/read-string (slurp f))]
-        (when (map? data) data))
-      (catch Exception _
-        nil))))
+(defn- read-template
+  "The template map in `source`. Throws, naming `label`, when it is not valid
+  EDN or not a map: a broken template must not silently hand over to the next
+  one in the precedence order."
+  [source label]
+  (let [data (try
+               (edn/read-string (slurp source))
+               (catch Exception e
+                 (throw (ex-info (str "Cannot read convention template " label ": " (ex-message e))
+                                 {:template label}
+                                 e))))]
+    (when-not (map? data)
+      (throw (ex-info (str "Convention template " label " is not an EDN map")
+                      {:template label})))
+    data))
+
+(defn- read-template-file
+  "The template in file `f`, or nil when there is no such file."
+  [f]
+  (when (.isFile f)
+    (read-template f (str f))))
 
 (defn resource-template
-  "Load the bundled resources/template.edn from the classpath. Returns nil when
-  unavailable or unreadable."
+  "The bundled resources/template.edn from the classpath, or nil when it is not
+  on the classpath. Throws when it is present but broken."
   []
   (when-let [r (io/resource "template.edn")]
-    (try
-      (let [data (edn/read-string (slurp r))]
-        (when (map? data) data))
-      (catch Exception _
-        nil))))
+    (read-template r "template.edn (bundled)")))
 
 (defn load-template
   "Resolve the active convention template: repo-local override, then the shared

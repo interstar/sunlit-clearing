@@ -220,6 +220,23 @@
                         conv/resource-template (constantly {:title "resource"})]
             (is (= "repo" (:title (conv/load-template))))))))))
 
+(deftest load-template-broken-override-fails-loudly
+  (with-temp-repo
+    (fn [dir]
+      (.mkdirs (io/file dir ".sunlit"))
+      (with-redefs [conv/user-template-file (fn [] (io/file dir "missing.edn"))
+                    conv/resource-template (constantly {:title "resource"})]
+        (testing "unparseable EDN names the file instead of falling back"
+          (spit (io/file dir ".sunlit" "template.edn") "{:title \"repo\"")
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                #"Cannot read convention template .*template\.edn"
+                                (conv/load-template))))
+        (testing "a non-map template is rejected"
+          (spit (io/file dir ".sunlit" "template.edn") "[:not :a :map]")
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                #"is not an EDN map"
+                                (conv/load-template))))))))
+
 (deftest html-escapes-paths-and-shows-verdict
   (let [html (conv/->html
               {:title "T"

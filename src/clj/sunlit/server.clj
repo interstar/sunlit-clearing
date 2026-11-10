@@ -32,6 +32,15 @@
       (when-not (empty? s)
         (json/parse-string s true)))))
 
+(defn- required-markdown
+  "The markdown string of a save request. Throws when the body has none, so a
+  malformed request can never overwrite a document with an empty one."
+  [req]
+  (let [md (:markdown (read-json-body req))]
+    (when-not (string? md)
+      (throw (ex-info "Request body must be JSON with a \"markdown\" string" {})))
+    md))
+
 (defn- err [status msg]
   (json-response {:ok false :error msg} status))
 
@@ -105,8 +114,7 @@
 
   (PUT "/api/annotation" [path :as req]
     (try
-      (let [body (read-json-body req)
-            md (or (:markdown body) "")
+      (let [md (required-markdown req)
             saved (ann/write-annotation! path md)
             rendered (render/render-annotation (:markdown saved) path)]
         (json-response {:ok true
@@ -126,8 +134,7 @@
 
   (PUT "/api/pages/:name" [name :as req]
     (try
-      (let [body (read-json-body req)
-            md (or (:markdown body) "")
+      (let [md (required-markdown req)
             saved (pages/write-page! name md)
             rendered (render/render-markdown (:markdown saved) (str "page:" (:name saved)))]
         (json-response {:ok true

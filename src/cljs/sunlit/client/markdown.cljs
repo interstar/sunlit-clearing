@@ -46,53 +46,71 @@
         line (inc (js/Math.floor (/ (- (.-clientY e) top) (line-height gutter))))]
     (min n (max 1 line))))
 
+(defn- mark-top
+  "Pixel offset of 1-based `line` from the top of the code-view wrapper."
+  [wrap code line]
+  (+ (- (.-top (.getBoundingClientRect code))
+        (.-top (.getBoundingClientRect wrap)))
+     (css-px code "paddingTop")
+     (* (dec line) (line-height code))))
+
+(defn- scroll-into-view!
+  "Scroll the window so `mark` sits a quarter of the way down, unless it is
+  already comfortably on screen."
+  [mark]
+  (let [r (.getBoundingClientRect mark)
+        vh (.-innerHeight js/window)]
+    (when (or (< (.-top r) 70) (> (.-top r) (- vh 40)))
+      (.scrollTo js/window 0 (+ (.-scrollY js/window)
+                                (.-top r)
+                                (- (/ vh 4)))))))
+
+(defn- place!
+  "Position the line-mark over `target` {:line :end}, or hide it when there is
+  no target. Scrolls to the mark only when the target differs from the one in
+  `scrolled`, so re-renders don't keep yanking the window back.
+  `refs` holds the code-view's :wrap, :code and :mark DOM elements."
+  [{:keys [wrap code mark]} scrolled {:keys [line end] :as target}]
+  (when (and wrap code mark)
+    (if-not line
+      (do (reset! scrolled nil)
+          (set! (.. mark -style -display) "none"))
+      (let [lh (line-height code)]
+        (set! (.. mark -style -display) "block")
+        (set! (.. mark -style -top) (str (mark-top wrap code line) "px"))
+        (set! (.. mark -style -height)
+              (str (* (inc (- (or end line) line)) lh) "px"))
+        (when (not= @scrolled target)
+          (reset! scrolled target)
+          (scroll-into-view! mark))))))
+
+(defn- sync-code-view!
+  "After a code-view render: re-highlight when content or language changed
+  (tracked in `highlighted`), then place the line-mark."
+  [refs highlighted scrolled this]
+  (let [[_ content language target] (r/argv this)]
+    (when (not= @highlighted [content language])
+      (reset! highlighted [content language])
+      (highlight! (:code @refs) language))
+    (place! @refs scrolled target)))
+
 (defn code-view
   "Source with a line-number gutter.
   target  {:line :end} (1-based, inclusive) is highlighted and scrolled into
           view when it changes.
   on-line (fn [line shift?]) is called for gutter clicks."
   [_content _language _target _on-line]
-  (let [wrap-el (atom nil)
-        code-el (atom nil)
-        mark-el (atom nil)
+  (let [refs (atom {})
         highlighted (atom nil)
         scrolled (atom nil)
-        place! (fn [{:keys [line end] :as target}]
-                 (let [wrap @wrap-el code @code-el mark @mark-el]
-                   (when (and wrap code mark)
-                     (if-not line
-                       (do (reset! scrolled nil)
-                           (set! (.. mark -style -display) "none"))
-                       (let [lh (line-height code)
-                             top (+ (- (.-top (.getBoundingClientRect code))
-                                       (.-top (.getBoundingClientRect wrap)))
-                                    (css-px code "paddingTop")
-                                    (* (dec line) lh))]
-                         (set! (.. mark -style -display) "block")
-                         (set! (.. mark -style -top) (str top "px"))
-                         (set! (.. mark -style -height)
-                               (str (* (inc (- (or end line) line)) lh) "px"))
-                         (when (not= @scrolled target)
-                           (reset! scrolled target)
-                           (let [r (.getBoundingClientRect mark)
-                                 vh (.-innerHeight js/window)]
-                             (when (or (< (.-top r) 70) (> (.-top r) (- vh 40)))
-                               (.scrollTo js/window 0 (+ (.-scrollY js/window)
-                                                         (.-top r)
-                                                         (- (/ vh 4))))))))))))
-        sync! (fn [this]
-                (let [[_ content language target] (r/argv this)]
-                  (when (not= @highlighted [content language])
-                    (reset! highlighted [content language])
-                    (highlight! @code-el language))
-                  (place! target)))]
+        sync! (partial sync-code-view! refs highlighted scrolled)]
     (r/create-class
      {:component-did-mount sync!
       :component-did-update sync!
       :reagent-render
       (fn [content language _target on-line]
         (let [n (line-count content)]
-          [:div.code-view {:ref #(reset! wrap-el %)}
+          [:div.code-view {:ref #(swap! refs assoc :wrap %)}
            [:pre.line-gutter
             {:aria-hidden true
              :title "Click a line number to link to it (shift-click for a range)"
@@ -102,10 +120,10 @@
                                     (.-shiftKey e))))}
             (str/join "\n" (range 1 (inc n)))]
            [:pre.code-pane
-            [:code {:ref #(reset! code-el %)
+            [:code {:ref #(swap! refs assoc :code %)
                     :class (when language (str "language-" language))}
              (or content "")]]
-           [:div.line-mark {:ref #(reset! mark-el %)}]]))})))
+           [:div.line-mark {:ref #(swap! refs assoc :mark %)}]]))})))
 
 (defn- parse-xml-instruction-blocks
   "Split message text into :text and :tag segments for Codex-style wrappers.

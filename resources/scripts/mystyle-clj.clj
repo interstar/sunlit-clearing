@@ -205,46 +205,74 @@
 (defn- symbol-named? [x names]
   (and (symbol? x) (contains? names (name x))))
 
-(defn- keyword-lookup-form? [x]
+(defn- quoted-form? [x]
+  (and (seq? x) (= 2 (count x)) (symbol-named? (first x) #{"quote"})))
+
+(defn- empty-default?
+  "nil, a blank string, or an empty collection (including '()): a value that
+   stands in for missing input without saying anything is wrong."
+  [x]
+  (let [v (if (quoted-form? x) (second x) x)]
+    (or (nil? v)
+        (and (string? v) (str/blank? v))
+        (and (coll? v) (empty? v)))))
+
+(defn- empty-fallback-form?
+  "(or ... <empty>), (get m k <empty>), (get-in m ks <empty>), (:k m <empty>)."
+  [x]
   (and (seq? x)
-       (keyword? (first x))
-       (<= 2 (count x) 3)))
+       (empty-default? (last x))
+       (let [head (first x)
+             n (count x)]
+         (or (and (symbol-named? head #{"or"}) (>= n 3))
+             (and (symbol-named? head #{"get" "get-in"}) (= n 4))
+             (and (keyword? head) (= n 3))))))
 
-(defn- input-access-form? [x]
-  (and (seq? x)
-       (or (and (symbol? (first x))
-                (#{"get" "get-in"} (name (first x))))
-           (keyword-lookup-form? x))))
+(def ^:private max-snippet-len 90)
 
-(defn- fail-soft-warning [path line col message]
-  {:file path
-   :line (or line 1)
-   :col (or col 1)
-   :level "WARN"
-   :message message})
+(defn- one-line-snippet [s]
+  (let [s (str/trim (str/replace s #"\s+" " "))]
+    (if (> (count s) max-snippet-len)
+      (str (subs s 0 (- max-snippet-len 3)) "...")
+      s)))
 
-(defn- find-fail-soft-inputs [path form]
+(defn- form-source
+  "Source text of `form`, located by its reader position, or nil."
+  [text starts form]
+  (let [{:keys [line column]} (meta form)
+        idx (index-from-line-col starts line column)]
+    (when (and idx (< idx (count text)))
+      (let [r (rt/source-logging-push-back-reader (subs text idx))
+            _ (read-form r)
+            rel-line (rt/get-line-number r)
+            rel-col (rt/get-column-number r)
+            end (if (= 1 rel-line)
+                  (+ idx (dec rel-col))
+                  (index-from-line-col starts (+ line (dec rel-line)) rel-col))]
+        (when (and end (<= idx end (count text)))
+          (subs text idx end))))))
+
+(defn- default-label [x]
+  (if (quoted-form? x)
+    (str "'" (pr-str (second x)))
+    (pr-str x)))
+
+(defn- fail-soft-warning [path text starts x]
+  (let [{:keys [line column]} (meta x)
+        snippet (one-line-snippet (or (form-source text starts x) (pr-str x)))]
+    {:file path
+     :line (or line 1)
+     :col (or column 1)
+     :level "WARN"
+     :message (format "fail-soft-input: `%s` silently falls back to %s; validate the input and fail clearly instead"
+                      snippet (default-label (last x)))}))
+
+(defn- find-fail-soft-inputs [path text starts form]
   (let [hits (atom [])]
     (walk/prewalk
      (fn [x]
-       (when (seq? x)
-         (let [{:keys [line column]} (meta x)
-               head (first x)]
-           (cond
-             (and (symbol-named? head #{"get" "get-in"})
-                  (>= (count x) 4))
-             (swap! hits conj
-                    (fail-soft-warning
-                     path line column
-                     "fail-soft-input: lookup supplies a default value; prefer explicit validation and a clear failure for missing/bad input"))
-
-             (and (symbol-named? head #{"or"})
-                  (>= (count x) 3)
-                  (input-access-form? (second x)))
-             (swap! hits conj
-                    (fail-soft-warning
-                     path line column
-                     "fail-soft-input: fallback around lookup may mask missing/bad input; prefer explicit validation and a clear failure")))))
+       (when (empty-fallback-form? x)
+         (swap! hits conj (fail-soft-warning path text starts x)))
        x)
      form)
     @hits))
@@ -288,7 +316,7 @@
                                              "Global atom/ref usage; a single global atom can be OK, but prefer stateless solutions."
                                              "Multiple global atoms/refs found; prefer a single global atom or stateless design.")})))))
     (doseq [{:keys [form]} forms
-            warning (find-fail-soft-inputs path form)]
+            warning (find-fail-soft-inputs path parse-text starts form)]
       (swap! warnings conj warning))
     (doseq [{:keys [form start-line end-line]} forms
             :when (defn-form? form)]

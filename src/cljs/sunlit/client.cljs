@@ -149,39 +149,41 @@
                 (fn [data] (swap! app-state assoc :conventions data))
                 (fn [err] (swap! app-state assoc :conventions {:ok false :error err}))))
 
-(defn- load-testing! []
-  (swap! app-state assoc :testing {:loading true})
-  (let [plugins ["unittests" "projectlint"]
-        results (atom {})]
+(defn- panels-state
+  "Page state from every plugin's reply in `rs`, in `plugins` order. When any
+  failed, :error names each failed plugin and its reason."
+  [plugins rs]
+  (let [failed (remove #(:ok (get rs %)) plugins)]
+    (cond-> {:ok (empty? failed)
+             :panels (mapv (fn [p] {:plugin p :html (:html (get rs p))}) plugins)}
+      (seq failed)
+      (assoc :error (str/join "; " (map #(str % ": " (or (:error (get rs %)) "failed"))
+                                        failed))))))
+
+(defn- record-panel!
+  "Store `plugin`'s reply; once all `plugins` have replied, publish them under `k`."
+  [k plugins results plugin data]
+  (let [rs (swap! results assoc plugin data)]
+    (when (= (count rs) (count plugins))
+      (swap! app-state assoc k (panels-state plugins rs)))))
+
+(defn- load-plugin-panels!
+  "Run `plugins` in parallel and show their panels together under state key `k`."
+  [k plugins]
+  (swap! app-state assoc k {:loading true})
+  (let [results (atom {})]
     (doseq [plugin plugins]
-      (let [on-done (fn [data]
-                      (swap! results assoc plugin data)
-                      (when (= (count @results) (count plugins))
-                        (let [rs @results]
-                          (swap! app-state assoc :testing
-                                 {:ok (every? :ok (map rs plugins))
-                                  :panels (mapv (fn [p] {:plugin p :html (or (:html (get rs p)) "")}) plugins)}))))]
+      (let [on-done (partial record-panel! k plugins results plugin)]
         (api/post-json (str "/api/plugins/" plugin "/run")
                        {:params {}}
                        on-done
-                       (fn [err] (on-done {:ok false :html "" :error err})))))))
+                       #(on-done {:ok false :error %}))))))
+
+(defn- load-testing! []
+  (load-plugin-panels! :testing ["unittests" "projectlint"]))
 
 (defn- load-lint! []
-  (swap! app-state assoc :lint {:loading true})
-  (let [plugins ["mystyle-clj" "mystyle-py" "mystyle-js"]
-        results (atom {})]
-    (doseq [plugin plugins]
-      (let [on-done (fn [data]
-                      (swap! results assoc plugin data)
-                      (when (= (count @results) (count plugins))
-                        (let [rs @results]
-                          (swap! app-state assoc :lint
-                                 {:ok (every? :ok (map rs plugins))
-                                  :panels (mapv (fn [p] {:plugin p :html (or (:html (get rs p)) "")}) plugins)}))))]
-        (api/post-json (str "/api/plugins/" plugin "/run")
-                       {:params {}}
-                       on-done
-                       (fn [err] (on-done {:ok false :html "" :error err})))))))
+  (load-plugin-panels! :lint ["mystyle-clj" "mystyle-py" "mystyle-js"]))
 
 (defn- load-sessions! []
   (api/get-json "/api/sessions"

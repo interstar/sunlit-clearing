@@ -46,6 +46,16 @@
     "hxcov" (test-report/parse-summary (combined-out cache))
     nil))
 
+(defn- run-failed?
+  "A plugin run fails when it threw or returned :ok false."
+  [run-result]
+  (false? (:ok run-result)))
+
+(defn- run-status
+  "Reported status: a failed run is \"error\", whatever its cache says."
+  [run-result cache-status]
+  (if (run-failed? run-result) "error" cache-status))
+
 (defn plugin-result
   "The /agents/ shape for one plugin invocation.
 
@@ -60,11 +70,11 @@
           id (or id (:cache_id run-result) "default")
           cache (when long-running?
                   (or (:cache run-result) (jobs/read-cache name id)))
-          status (or (:status run-result) (:status cache)
-                     (if long-running? "never" "ok"))
+          cache-status (or (:status run-result) (:status cache)
+                           (if long-running? "never" "ok"))
           running? (if long-running? (jobs/running? name id) false)
           cache-backed? (boolean (:cache_id run-result))
-          stale? (and long-running? (stale-cache? status cache))
+          stale? (and long-running? (stale-cache? cache-status cache))
           should-launch? (and long-running?
                               cache-backed?
                               (not running?)
@@ -73,11 +83,11 @@
                             (plugins/start-plugin! name {:params (assoc params :id id) :path path}))
             launched? (and should-launch? (:ok launch-result))
             finished-at (:finished_at cache)]
-        {:ok true
+        {:ok (not (run-failed? run-result))
          :name (str name)
          :id id
          :long_running long-running?
-         :status status
+         :status (run-status run-result cache-status)
          :running (if long-running? (or running? launched?) false)
          :started_at (:started_at cache)
          :finished_at finished-at

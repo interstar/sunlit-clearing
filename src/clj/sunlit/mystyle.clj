@@ -9,7 +9,8 @@
             [clojure.string :as str]
             [sunlit.clj-source :as src]
             [sunlit.repo :as repo]
-            [hiccup.core :as hiccup])
+            [hiccup.core :as hiccup]
+            [hiccup.util :as h])
   (:import [java.io File]))
 
 (def linters
@@ -102,6 +103,19 @@
                :message message}))
        vec))
 
+(defn- file-lines [path]
+  (some-> (src/read-rel path) str/split-lines vec))
+
+(defn attach-source
+  "Add each finding's source line (as found at lint time) under :source."
+  [findings]
+  (let [lines-of (memoize file-lines)]
+    (mapv (fn [{:keys [file line] :as f}]
+            (if-let [text (get (lines-of file) (dec line))]
+              (assoc f :source (str/trimr text))
+              f))
+          findings)))
+
 (defn summarize [findings]
   (let [by (frequencies (map :level findings))]
     {:count (count findings)
@@ -141,6 +155,34 @@
     "ERROR" "mystyle-error"
     "mystyle-info"))
 
+(defn- message-parts
+  "\"fail-soft-input: detail\" -> [\"fail-soft-input\" \"detail\"]; [nil msg] otherwise."
+  [msg]
+  (if-let [[_ category detail] (re-matches #"(?s)([a-z][a-z0-9-]*): (.*)" (str msg))]
+    [category detail]
+    [nil (str msg)]))
+
+(defn- message-html
+  "Escaped message hiccup; `backticked` spans become <code>."
+  [text]
+  (map-indexed (fn [i part]
+                 (if (odd? i)
+                   [:code (h/escape-html part)]
+                   (h/escape-html part)))
+               (str/split text #"`" -1)))
+
+(defn- finding-item [file {:keys [line col level message source]}]
+  (let [[category detail] (message-parts message)]
+    [:li {:class (str "mystyle-item " (level-class level))}
+     [:a.mystyle-loc {:href (str (src/file-href file) "?line=" line)
+                      :title "Open at this line"}
+      (str line ":" col)]
+     [:span.mystyle-level level]
+     (when category [:span.mystyle-cat (h/escape-html category)])
+     [:span.mystyle-msg (message-html detail)]
+     (when-not (str/blank? source)
+       [:pre.mystyle-src (h/escape-html (str/trim source))])]))
+
 (defn findings-html [findings]
   (if (empty? findings)
     (hiccup/html
@@ -156,10 +198,7 @@
             [:span.meta (str (count fs) " finding(s)")]]
            [:ul.mystyle-list
             (for [f (sort-by (juxt :line :col) fs)]
-              [:li {:class (str "mystyle-item " (level-class (:level f)))}
-               [:span.mystyle-loc (str (:line f) ":" (:col f))]
-               [:span.mystyle-level (:level f)]
-               [:span.mystyle-msg (:message f)]])]])]))))
+              (finding-item file f))]])]))))
 
 (defn- error-html [title msg]
   (hiccup/html
@@ -196,7 +235,7 @@
                                     :env (subprocess-env)]))
               out (str out)
               err (str err)
-              findings (parse-findings out)
+              findings (attach-source (parse-findings out))
               summary (summarize findings)
               file-count (count (distinct (map :file findings)))
               short (str name ": " (:count summary) " findings across "

@@ -1,6 +1,6 @@
 (ns sunlit.test-report-test
   (:require [clojure.test :refer [deftest is]]
-            [sunlitxkg.test-report :as report]))
+            [sunlit.test-report :as report]))
 
 (deftest parse-pytest-summary-line
   (let [s (report/parse-pytest-summary

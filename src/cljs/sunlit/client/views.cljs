@@ -499,9 +499,92 @@
        " · "
        [:a {:href (str "#/file/" (js/encodeURIComponent path))} "clear"]])))
 
+(defn- line-selection
+  "Lines selected by a gutter click on `line`: shift extends the current
+  `target` to include it; a plain click selects just that line."
+  [target line shift?]
+  (if (and shift? target)
+    {:line (min line (:line target))
+     :end (max line (:end target))}
+    {:line line :end line}))
+
+(defn- file-head [file]
+  [:div.page-head
+   [:div
+    [:p.crumb
+     [:a {:href "#/"} "Tree"]
+     " / "
+     [:span (:path file)]]
+    [:h1 (:name file)]]
+   [:div.btn-row
+    [:button.btn-ghost {:on-click #(js/history.back)} "Back"]]])
+
+(defn- auto-plugin-panels
+  "Panels of the plugins that open automatically for this file (e.g. an image)."
+  [plugins reload-file!]
+  (when (seq plugins)
+    [:div.auto-plugins
+     (for [[i p] (map-indexed vector plugins)]
+       ^{:key i}
+       [html-panel {:html (:html p) :on-rerun reload-file!}])]))
+
+(defn- source-meta [file]
+  (str (:size file) " bytes"
+       (if (image-file? file)
+         " · image"
+         (when (:language file)
+           (str " · " (:language file))))))
+
+(defn- source-body
+  "The file's content: rendered/source tabs for markdown, a code view with a
+  line gutter for other text, or a note for binary files. Keyed by path so a
+  new file gets a fresh view (and scroll state)."
+  [file target on-line]
+  (let [{:keys [path content language]} file]
+    (cond
+      (not (:text? file))
+      (if (image-file? file)
+        [:p.muted "Image preview is shown above."]
+        [:p.muted "Binary or large file — content not shown. A plugin may open this later."])
+
+      (md/wcn-file? file)
+      [md/wcn-doc content]
+
+      (md/markdown-file? file)
+      ^{:key path}
+      [markdown-tabs content language target on-line]
+
+      :else
+      ^{:key path}
+      [md/code-view content language target on-line])))
+
+(defn- source-section [route data target on-line]
+  (let [file (:file data)]
+    [:section.source
+     [:div.section-head
+      [:h2 "Source"]
+      [:span.meta (source-meta file)]]
+     [location-note route data target (:path file)]
+     [source-body file target on-line]]))
+
+(defn- file-view
+  "A loaded file: header, auto plugins, annotation editor and source."
+  [data route navigate! on-save reload-file!]
+  (let [path (get-in data [:file :path])
+        target (file-target route data)
+        on-line #(navigate! (line-href path (line-selection target %1 %2)))]
+    [:<>
+     [file-head (:file data)]
+     [auto-plugin-panels (:auto_plugins data) reload-file!]
+     [markdown-editor {:title "Annotation"
+                       :markdown (get-in data [:annotation :markdown])
+                       :html (:annotation_html data)
+                       :on-save #(on-save path %)
+                       :on-rerun reload-file!}]
+     [source-section route data target on-line]]))
+
 (defn file-page [st navigate! on-save reload-file!]
-  (let [data (:file st)
-        route (:route st)]
+  (let [data (:file st)]
     [:section.page.file-page
      (cond
        (or (nil? data) (:loading data))
@@ -511,61 +594,7 @@
        [:p.error (or (:error data) "Failed to load file")]
 
        :else
-       (let [file (:file data)
-             path (:path file)
-             image? (image-file? file)
-             target (file-target route data)
-             on-line (fn [line shift?]
-                       (navigate!
-                        (line-href path
-                                   (if (and shift? target)
-                                     {:line (min line (:line target))
-                                      :end (max line (:end target))}
-                                     {:line line :end line}))))]
-         [:<>
-          [:div.page-head
-           [:div
-            [:p.crumb
-             [:a {:href "#/"} "Tree"]
-             " / "
-             [:span path]]
-            [:h1 (:name file)]]
-           [:div.btn-row
-            [:button.btn-ghost {:on-click #(js/history.back)} "Back"]]]
-          (when (seq (:auto_plugins data))
-            [:div.auto-plugins
-             (for [[i p] (map-indexed vector (:auto_plugins data))]
-               ^{:key i}
-               [html-panel {:html (or (:html p) "") :on-rerun reload-file!}])])
-          [markdown-editor {:title "Annotation"
-                            :markdown (get-in data [:annotation :markdown])
-                            :html (:annotation_html data)
-                            :on-save #(on-save path %)
-                            :on-rerun reload-file!}]
-          [:section.source
-           [:div.section-head
-            [:h2 "Source"]
-            [:span.meta (str (:size file) " bytes"
-                             (if image?
-                               " · image"
-                               (when (:language file)
-                                 (str " · " (:language file)))))]]
-           [location-note route data target path]
-           (if (:text? file)
-             (cond
-               (md/wcn-file? file)
-               [md/wcn-doc (:content file)]
-
-               (md/markdown-file? file)
-               ^{:key path}
-               [markdown-tabs (:content file) (:language file) target on-line]
-
-               :else
-               ^{:key path}
-               [md/code-view (:content file) (:language file) target on-line])
-             (if image?
-               [:p.muted "Image preview is shown above."]
-               [:p.muted "Binary or large file — content not shown. A plugin may open this later."]))]]))]))
+       [file-view data (:route st) navigate! on-save reload-file!])]))
 
 (defn wiki-page [st on-save on-create reload!]
   (let [data (:wiki st)]

@@ -46,6 +46,21 @@
       (is (= :ignored (git/status-for "ignored.txt")))
       (is (false? (git/tracked? "does-not-exist"))))))
 
+(deftest failed-listing-means-unknown-not-untracked
+  (with-temp-git-repo
+    (fn [_]
+      (let [real-run-git @#'git/run-git]
+        (with-redefs [git/run-git (fn [& args]
+                                    (if (= ["ls-files"] (vec args))
+                                      {:ok false :out "" :err "fatal: simulated"}
+                                      (apply real-run-git args)))]
+          (binding [*err* (java.io.StringWriter.)]
+            (is (nil? (git/status-for "tracked.txt")))
+            (is (nil? (git/status-for "untracked.txt")))
+            (is (= ["tracked.txt" "untracked.txt"]
+                   (git/keep-tracked ["tracked.txt" "untracked.txt"])))
+            (is (re-find #"git ls-files` failed: fatal: simulated" (str *err*)))))))))
+
 (deftest annotate-entries-assoc-status
   (with-temp-git-repo
     (fn [dir]

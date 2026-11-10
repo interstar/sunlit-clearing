@@ -791,7 +791,8 @@ pre code.wchnt-coloured {
 
 .mystyle-item {
   display: flex;
-  gap: 0.55rem;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.55rem;
   align-items: baseline;
   padding: 0.3rem 0.65rem;
   border-left: 3px solid var(--line);
@@ -824,9 +825,38 @@ pre code.wchnt-coloured {
 .mystyle-error .mystyle-level { color: var(--danger); }
 .mystyle-info .mystyle-level { color: var(--muted); }
 
+a.mystyle-loc { text-decoration: none; }
+a.mystyle-loc:hover { text-decoration: underline; }
+
+.mystyle-cat {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .mystyle-msg {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  min-width: 12rem;
   line-height: 1.4;
+}
+
+.mystyle-msg code {
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.mystyle-src {
+  flex: 1 0 100%;
+  margin: 0.15rem 0 0.1rem;
+  padding: 0.25rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: var(--paper);
+  border-radius: 4px;
+  white-space: pre;
+  overflow-x: auto;
 }
 
 .plugin-panel.python-tools dl {
