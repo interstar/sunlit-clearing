@@ -5,9 +5,23 @@
             [clojure.string :as str]
             [sunlit.repo :as repo]))
 
+(def ^:private tools
+  "Analysis tools installed into .sunlit/venv (not project app deps), as
+  [pip-package import-module]. tree-sitter grammars are for the mystyle-js
+  and mystyle-cpp linters."
+  [["pytest" "pytest"]
+   ["pytest-cov" "pytest_cov"]
+   ["coverage" "coverage"]
+   ["tree-sitter" "tree_sitter"]
+   ["tree-sitter-javascript" "tree_sitter_javascript"]
+   ["tree-sitter-typescript" "tree_sitter_typescript"]
+   ["tree-sitter-cpp" "tree_sitter_cpp"]])
+
 (def tools-packages
-  "Tool packages installed into .sunlit/venv (not project app deps)."
-  ["pytest" "pytest-cov" "coverage"])
+  "Pip packages installed into .sunlit/venv."
+  (mapv first tools))
+
+(defonce ^:private env-lock (Object.))
 
 (defn- venv-python-file []
   (let [unix (repo/sidecar-file "venv" "bin" "python")
@@ -68,15 +82,15 @@
                         :env (-> (into {} (System/getenv)) (dissoc "CLASSPATH"))])))
 
 (def ^:private probe-script
-  "import importlib.util as u, sys
+  (str "import importlib.util as u, sys
 missing = []
-for label, mod in [('pytest', 'pytest'), ('pytest-cov', 'pytest_cov'), ('coverage', 'coverage')]:
+for label, mod in [" (str/join ", " (for [[label mod] tools] (str "('" label "', '" mod "')"))) "]:
     if u.find_spec(mod) is None:
         missing.append(label)
 print('OK' if not missing else 'MISSING ' + ','.join(missing))
 print(sys.executable)
 print(sys.version.split()[0])
-")
+"))
 
 (defn tool-status
   "Quick status map for the control panel."
@@ -107,10 +121,7 @@ print(sys.version.split()[0])
                    (str "Tools OK · Python " (or (get lines 2) "?"))
                    (str/trim (str head " " err)))}))))
 
-(defn ensure-analysis-env!
-  "Create .sunlit/venv if missing and install analysis tools (pytest, …).
-  Returns {:ok true :python path} or {:ok false :error msg}."
-  []
+(defn- setup-analysis-env! []
   (try
     (when-not (venv-exists?)
       (let [venv-dir (.getAbsolutePath (repo/sidecar-file "venv"))
@@ -132,6 +143,14 @@ print(sys.version.split()[0])
       {:ok true :python py})
     (catch Exception e
       {:ok false :error (or (ex-message e) (.getMessage e))})))
+
+(defn ensure-analysis-env!
+  "Create .sunlit/venv if missing and install any missing analysis tools.
+  Serialised, so concurrent jobs don't build the same venv at once.
+  Returns {:ok true :python path} or {:ok false :error msg}."
+  []
+  (locking env-lock
+    (setup-analysis-env!)))
 
 (defn- python-package-root?
   []

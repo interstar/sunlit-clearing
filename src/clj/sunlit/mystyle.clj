@@ -8,6 +8,8 @@
             [clojure.java.shell :as sh]
             [clojure.string :as str]
             [sunlit.clj-source :as src]
+            [sunlit.jobs :as jobs]
+            [sunlit.python :as py]
             [sunlit.repo :as repo]
             [hiccup.core :as hiccup]
             [hiccup.util :as h])
@@ -25,35 +27,57 @@
    :mystyle-js {:name "mystyle-js"
                 :title "mystyle-js"
                 :script "mystyle-js.py"
-                :kind :python}})
+                :kind :python}
+   :mystyle-cpp {:name "mystyle-cpp"
+                 :title "mystyle-cpp"
+                 :script "mystyle-cpp.py"
+                 :kind :python}
+   ;; Native binary (Haxe compiled to C++), vendored like the scripts.
+   :mystyle-hx {:name "mystyle-hx"
+                :title "mystyle-hx"
+                :script "mystyle-haxe"
+                :kind :binary}})
 
 ;; ---------------------------------------------------------------------------
 ;; Script / interpreter resolution
 ;; ---------------------------------------------------------------------------
 
+(defn- extract-resource!
+  "Copy classpath resource `scripts/<script>` (byte-for-byte, so binaries
+  survive) into a fresh temp dir, executable. Returns its absolute path."
+  [script]
+  (let [dir (File/createTempFile "sunlit-mystyle" nil)
+        out (io/file dir script)]
+    (.delete dir)
+    (.mkdirs dir)
+    (with-open [in (io/input-stream (io/resource (str "scripts/" script)))]
+      (io/copy in out))
+    (.setExecutable out true)
+    (.getAbsolutePath out)))
+
 (defn- script-path
-  "Locate a bundled linter script: dev `scripts/` first, then classpath
-  resources (extracted to a temp dir when running from the uberjar)."
+  "Locate a bundled linter script or binary: dev `scripts/` first, then
+  classpath resources (extracted to a temp dir when running from the uberjar)."
   [script]
   (let [from-cwd (io/file (System/getProperty "user.dir") "scripts" script)]
     (cond
-      (.isFile from-cwd)
-      (.getAbsolutePath from-cwd)
-
-      (io/resource (str "scripts/" script))
-      (let [dir (File/createTempFile "sunlit-mystyle" nil)]
-        (.delete dir)
-        (.mkdirs dir)
-        (let [out (io/file dir script)]
-          (spit out (slurp (io/resource (str "scripts/" script))))
-          (.getAbsolutePath out)))
-
+      (.isFile from-cwd) (.getAbsolutePath from-cwd)
+      (io/resource (str "scripts/" script)) (extract-resource! script)
       :else nil)))
 
-(defn- python-bin []
+(defn- fallback-python
+  "SUNLIT_PYTHON, else the shared ~/.main_python_venv, else python3."
+  []
   (or (System/getenv "SUNLIT_PYTHON")
       (let [shared (str (System/getProperty "user.home") "/.main_python_venv/bin/python")]
         (if (.isFile (io/file shared)) shared "python3"))))
+
+(defn- python-bin
+  "The repo's .sunlit/venv python (created, and given the tree-sitter
+  grammars, on first use), else `fallback-python` when it can't be set up."
+  []
+  (let [{:keys [ok python]} (py/ensure-analysis-env!)]
+    (if ok python (fallback-python))))
 
 (defn- executable-on-path? [prog]
   (try
@@ -66,14 +90,28 @@
   (-> (into {} (System/getenv))
       (dissoc "CLASSPATH")))
 
+(defn- native-platform?
+  "True on the platform the vendored binaries are built for (Linux x86-64)."
+  []
+  (and (= "Linux" (System/getProperty "os.name"))
+       (contains? #{"amd64" "x86_64"} (System/getProperty "os.arch"))))
+
+(defn- binary-path
+  "The vendored binary `program` on Linux x86-64, else `program` itself when
+  it is on PATH (e.g. built locally on another platform), else nil."
+  [program]
+  (or (when (native-platform?) (script-path program))
+      (when (executable-on-path? program) program)))
+
 (defn- resolve-cmd [linter]
-  (let [sp (script-path (:script linter))
-        root (str (repo/repo-root))]
-    (when sp
-      (case (:kind linter)
-        :bb (when (executable-on-path? "bb") ["bb" sp root])
-        :python [(python-bin) sp root]
-        nil))))
+  (let [root (str (repo/repo-root))]
+    (if (= :binary (:kind linter))
+      (some-> (binary-path (:script linter)) (vector root))
+      (when-let [sp (script-path (:script linter))]
+        (case (:kind linter)
+          :bb (when (executable-on-path? "bb") ["bb" sp root])
+          :python [(python-bin) sp root]
+          nil)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Output parsing
@@ -223,10 +261,13 @@
    :summary nil
    :data {:findings [] :error msg}})
 
-(defn- unavailable-msg [{:keys [name kind]}]
+(defn- unavailable-msg [{:keys [name kind script]}]
   (str name " is not available: "
-       (if (= :bb kind)
-         "babashka ('bb') was not found on PATH."
+       (case kind
+         :bb "babashka ('bb') was not found on PATH."
+         :binary (str "the bundled '" script "' binary is Linux x86-64 only, and no '"
+                      script "' was found on PATH. Build it from self-written-tools/"
+                      "mystyle/haxe (or vendor it into scripts/) to enable this panel.")
          "no Python interpreter found.")))
 
 (defn- findings-payload
@@ -271,3 +312,38 @@
         (run-linter linter cmd)
         (catch Exception e
           (error-payload title cmd 1 (or (ex-message e) (str e))))))))
+
+;; ---------------------------------------------------------------------------
+;; Plugin maps (one per linter; see sunlit.plugins.mystyle-*)
+;; ---------------------------------------------------------------------------
+
+(defn- run-panel
+  "Panel showing the cached findings of plugin `plugin-name`."
+  [plugin-name params]
+  (let [id (or (:id params) plugin-name)
+        cache (jobs/read-cache plugin-name id)]
+    (jobs/render-panel
+     {:plugin plugin-name
+      :id id
+      :title (or (:title params) plugin-name)
+      :summary-html (summary-html (:summary cache))
+      :params (assoc params :id id)})))
+
+(defn- start-scan!
+  "Launch a background run of linter `linter-key` into the jobs cache."
+  [linter-key plugin-name params]
+  (jobs/start-compute!
+   {:plugin plugin-name
+    :id (or (:id params) plugin-name)
+    :label (str plugin-name "-scan")
+    :compute! #(compute! linter-key)}))
+
+(defn linter-plugin
+  "Plugin map for the long-running, cached runner of `linter-key`."
+  [linter-key description]
+  (let [plugin-name (:name (get linters linter-key))]
+    {:name plugin-name
+     :description description
+     :long-running? true
+     :run (fn [{:keys [params]}] (run-panel plugin-name params))
+     :start! (fn [{:keys [params]}] (start-scan! linter-key plugin-name params))}))

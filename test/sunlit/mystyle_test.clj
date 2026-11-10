@@ -78,6 +78,60 @@
                                        {:file "src/foo.clj" :line 99 :col 1}
                                        {:file "src/missing.clj" :line 1 :col 1}])))))))
 
+(deftest linter-plugins-share-one-shape
+  (doseq [k [:mystyle-clj :mystyle-py :mystyle-js :mystyle-cpp :mystyle-hx]]
+    (let [p (mystyle/linter-plugin k "desc")]
+      (is (= (:name (get mystyle/linters k)) (:name p)))
+      (is (:long-running? p))
+      (is (fn? (:run p)))
+      (is (fn? (:start! p))))))
+
+(deftest mystyle-cpp-runs-the-vendored-script
+  (with-temp-repo
+    (fn [dir]
+      (spit (io/file dir "foo.cpp") "static int counter = 0;\nint get() { return counter; }\n")
+      (let [payload (mystyle/compute! :mystyle-cpp)
+            findings (get-in payload [:data :findings])]
+        (is (= "ok" (:status payload)) (:error payload))
+        (is (= [{:file "foo.cpp" :line 1 :level "WARN"}]
+               (mapv #(select-keys % [:file :line :level]) findings)))
+        (is (str/starts-with? (:message (first findings)) "global-usage:"))))))
+
+(deftest mystyle-hx-runs-the-vendored-binary
+  (with-temp-repo
+    (fn [dir]
+      (spit (io/file dir "Foo.hx")
+            "class Foo {\n\tstatic var counter = 0;\n\tpublic function new() {}\n}\n")
+      (let [payload (mystyle/compute! :mystyle-hx)
+            findings (get-in payload [:data :findings])]
+        (is (= "ok" (:status payload)) (:error payload))
+        (is (= [{:file "Foo.hx" :line 2 :level "WARN"}]
+               (mapv #(select-keys % [:file :line :level]) findings)))
+        (is (str/starts-with? (:message (first findings)) "global-usage:"))))))
+
+(deftest mystyle-hx-fails-gracefully-without-a-usable-binary
+  (testing "no vendored binary and nothing on PATH"
+    (with-redefs [sunlit.mystyle/script-path (constantly nil)
+                  sunlit.mystyle/executable-on-path? (constantly false)]
+      (let [payload (mystyle/compute! :mystyle-hx)]
+        (is (= "error" (:status payload)))
+        (is (str/includes? (:error payload) "Linux x86-64 only"))
+        (is (str/includes? (:html payload) "plugin-error"))
+        (is (= [] (get-in payload [:data :findings]))))))
+  (testing "another platform ignores the vendored Linux binary"
+    (with-redefs [sunlit.mystyle/native-platform? (constantly false)
+                  sunlit.mystyle/executable-on-path? (constantly false)]
+      (is (= "error" (:status (mystyle/compute! :mystyle-hx))))))
+  (testing "another platform uses mystyle-haxe from PATH"
+    (with-redefs [sunlit.mystyle/native-platform? (constantly false)
+                  sunlit.mystyle/executable-on-path? (constantly true)]
+      (is (= "mystyle-haxe" (first (#'mystyle/resolve-cmd (get mystyle/linters :mystyle-hx)))))))
+  (testing "a binary that cannot run is reported, not thrown"
+    (with-redefs [sunlit.mystyle/script-path (constantly "/nonexistent/mystyle-haxe")]
+      (let [payload (mystyle/compute! :mystyle-hx)]
+        (is (= "error" (:status payload)))
+        (is (string? (:error payload)))))))
+
 (deftest summary-html-headline
   (is (nil? (mystyle/summary-html {:count 0})))
   (let [html (mystyle/summary-html {:count 5 :warn 2 :hard 1 :info 1 :error 1})]

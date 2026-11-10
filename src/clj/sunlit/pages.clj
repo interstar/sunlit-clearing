@@ -121,7 +121,8 @@
 (def ^:private python-tools-seed
   (str "# Python tools\n\n"
        "Sunlit Clearing can keep a private virtualenv under "
-       "`.sunlit/venv` for analysis tools (pytest, coverage). "
+       "`.sunlit/venv` for analysis tools (pytest, coverage, and the tree-sitter "
+       "grammars the mystyle linters use). "
        "This is separate from any project or shared venv you use for app code.\n\n"
        "```plugin python-tools\n"
        "{}\n"

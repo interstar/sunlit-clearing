@@ -18,3 +18,7 @@ resources/public/js/compiled/
 .eyeball/
 __pycache__/
 *.py[cod]
+
+# mystyle-haxe: Linux-only native binary, vendored locally from self-written-tools/mystyle/haxe (not in git)
+scripts/mystyle-haxe
+resources/scripts/mystyle-haxe

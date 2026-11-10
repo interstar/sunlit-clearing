@@ -183,7 +183,7 @@
   (load-plugin-panels! :testing ["unittests" "projectlint"]))
 
 (defn- load-lint! []
-  (load-plugin-panels! :lint ["mystyle-clj" "mystyle-py" "mystyle-js"]))
+  (load-plugin-panels! :lint ["mystyle-clj" "mystyle-py" "mystyle-js" "mystyle-cpp" "mystyle-hx"]))
 
 (defn- load-sessions! []
   (api/get-json "/api/sessions"

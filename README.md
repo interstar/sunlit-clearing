@@ -121,14 +121,23 @@ Long-running builtins:
 | `mystyle-clj` | `bb scripts/mystyle-clj.clj <repo>` | findings panel |
 | `mystyle-py` | `python3 scripts/mystyle-py.py <repo>` | findings panel |
 | `mystyle-js` | `python3 scripts/mystyle-js.py <repo>` (needs tree-sitter) | findings panel |
+| `mystyle-cpp` | `python3 scripts/mystyle-cpp.py <repo>` (needs tree-sitter) | findings panel |
+| `mystyle-hx` | `scripts/mystyle-haxe <repo>` (native binary) | findings panel |
 
-Python analysis tools live in `.sunlit/venv` (created on first Python test/coverage run). Dev requirements: `pip install -r requirements-dev.txt`.
+Python analysis tools (pytest, coverage, and the tree-sitter grammars for the
+mystyle linters) live in `.sunlit/venv`, created on the first Python
+test/coverage/lint run. A venv missing any of them is topped up on its next
+use. The Python mystyle linters run in it, falling back to `SUNLIT_PYTHON` or
+`~/.main_python_venv` if it can't be set up. Dev requirements: `pip install -r requirements-dev.txt`.
 
-The `mystyle-*` linter scripts are vendored into `scripts/` (dev) and
-`resources/scripts/` (bundled into the uberjar) from the author's local Codex
-skills; `mystyle-js` additionally needs `tree-sitter`,
+The `mystyle-*` linters are vendored into `scripts/` (dev) and
+`resources/scripts/` (bundled into the uberjar) from their canonical source,
+`self-written-tools/mystyle/`. `mystyle-js` additionally needs `tree-sitter`,
 `tree-sitter-javascript`, and `tree-sitter-typescript` installed for the
-interpreter in use.
+interpreter in use, and `mystyle-cpp` needs `tree-sitter-cpp`. `mystyle-haxe` is a Linux x86-64 binary built from
+`mystyle/haxe/` (`./build.sh`); copy `bin/mystyle-haxe` into both directories
+after rebuilding. Without a vendored copy, sunlit falls back to `mystyle-haxe`
+on PATH.
 
 ## Locations
 

@@ -13,6 +13,8 @@
             [sunlit.plugins.mystyle-clj :as mystyle-clj]
             [sunlit.plugins.mystyle-py :as mystyle-py]
             [sunlit.plugins.mystyle-js :as mystyle-js]
+            [sunlit.plugins.mystyle-cpp :as mystyle-cpp]
+            [sunlit.plugins.mystyle-hx :as mystyle-hx]
             [sunlit.plugins.projectlint :as projectlint]
             [sunlit.plugins.pycov :as pycov]
             [sunlit.plugins.python-tools :as python-tools]
@@ -33,6 +35,8 @@
    mystyle-clj/plugin
    mystyle-py/plugin
    mystyle-js/plugin
+   mystyle-cpp/plugin
+   mystyle-hx/plugin
    run/plugin
    unittests/plugin
    cloverage/plugin

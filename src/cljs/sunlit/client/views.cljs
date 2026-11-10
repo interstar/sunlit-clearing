@@ -678,7 +678,7 @@
      [:div.page-head
       [:div
        [:h1 "Lint"]
-       [:p.muted "mystyle-clj · mystyle-py · mystyle-js"]]
+       [:p.muted "mystyle-clj · mystyle-py · mystyle-js · mystyle-cpp · mystyle-hx"]]
       [:button.btn {:on-click reload!} "Refresh"]]
      (cond
        (or (nil? data) (:loading data))
