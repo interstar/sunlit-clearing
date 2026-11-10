@@ -36,33 +36,48 @@
               "?" "[^/]"
               (Pattern/quote tok))))))
 
+(defn- filter-glob
+  "The `paths` matching `glob`."
+  [paths glob]
+  (let [re (glob->regex glob)]
+    (filterv #(re-matches re %) paths)))
+
+(defn- read-project-text
+  "Text of `path` when it is a listed project file and a text file, else nil."
+  [file-set path]
+  (when (contains? file-set (str path))
+    (try
+      (let [f (repo/safe-resolve path)]
+        (when (repo/text-file? f) (slurp f)))
+      (catch Exception _ nil))))
+
+(defn- line-matcher
+  "Predicate on a line: regex `pattern` finds a match, or a literal string occurs."
+  [pattern]
+  (if (instance? Pattern pattern)
+    #(re-find pattern %)
+    (let [s (str pattern)] #(str/includes? % s))))
+
+(defn- grep-paths
+  "[{:path :line :text}] for each line of `paths` matching `pattern`.
+  `lines-fn` returns a file's lines, or nil for unreadable files."
+  [lines-fn pattern paths]
+  (let [hit? (line-matcher pattern)]
+    (vec (for [p paths
+               [i line] (map-indexed vector (lines-fn p))
+               :when (hit? line)]
+           {:path p :line (inc i) :text line}))))
+
 (defn read-api
   "Map of symbol -> fn for the read-only helpers, over a fresh cache."
   []
   (let [all-files (delay (repo/list-project-files))
         file-set (delay (set @all-files))
-        files (fn
-                ([] @all-files)
-                ([glob] (let [re (glob->regex glob)]
-                          (filterv #(re-matches re %) @all-files))))
-        slurp* (memoize
-                (fn [path]
-                  (when (contains? @file-set (str path))
-                    (try
-                      (let [f (repo/safe-resolve path)]
-                        (when (repo/text-file? f) (slurp f)))
-                      (catch Exception _ nil)))))
+        files (fn ([] @all-files)
+                ([glob] (filter-glob @all-files glob)))
+        slurp* (memoize #(read-project-text @file-set %))
         lines* (memoize (fn [path] (some-> (slurp* path) str/split-lines vec)))
-        matcher (fn [pattern]
-                  (if (instance? Pattern pattern)
-                    #(re-find pattern %)
-                    (let [s (str pattern)] #(str/includes? % s))))
-        grep* (fn [pattern paths]
-                (let [hit? (matcher pattern)]
-                  (vec (for [p paths
-                             [i line] (map-indexed vector (or (lines* p) []))
-                             :when (hit? line)]
-                         {:path p :line (inc i) :text line}))))]
+        grep* (partial grep-paths lines*)]
     {'files files
      'exists? (fn [path] (contains? @file-set (str path)))
      'slurp-file slurp*

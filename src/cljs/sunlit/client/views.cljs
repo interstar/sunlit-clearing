@@ -183,9 +183,7 @@
         form (.querySelector backdrop "form")
         field #(.querySelector form (str "[name=" % "]"))
         close! #(.remove backdrop)
-        post! (fn [action]
-                (close!)
-                (matrix-post! panel (assoc action :coords coords) on-done))
+        post! #(do (close!) (matrix-post! panel (assoc % :coords coords) on-done))
         auto-link (attr td "data-auto-link")]
     (set! (.-textContent (.querySelector form ".js-title")) (str/join " × " (vals coords)))
     (set! (.-textContent (.querySelector form ".js-auto"))

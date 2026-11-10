@@ -209,67 +209,65 @@
 ;; Compute! (runs in the job cache worker)
 ;; ---------------------------------------------------------------------------
 
+(defn- error-payload
+  "Jobs cache payload for a failed linter run. stdout/stderr default to
+  \"\" and `msg`."
+  [title cmd exit msg & {:keys [stdout stderr] :or {stdout "" stderr msg}}]
+  {:status "error"
+   :cmd (vec cmd)
+   :exit exit
+   :stdout stdout
+   :stderr stderr
+   :error msg
+   :html (error-html title msg)
+   :summary nil
+   :data {:findings [] :error msg}})
+
+(defn- unavailable-msg [{:keys [name kind]}]
+  (str name " is not available: "
+       (if (= :bb kind)
+         "babashka ('bb') was not found on PATH."
+         "no Python interpreter found.")))
+
+(defn- findings-payload
+  "Jobs cache payload for a linter run that produced findings (or none)."
+  [{:keys [name]} cmd exit out err findings]
+  (let [summary (summarize findings)
+        file-count (count (distinct (map :file findings)))]
+    {:status "ok"
+     :cmd (vec cmd)
+     :exit exit
+     :stdout (str name ": " (:count summary) " findings across "
+                  file-count " file" (when (not= 1 file-count) "s") ".")
+     :stderr err
+     :html (findings-html findings)
+     :summary summary
+     :data {:findings findings :summary summary :raw out :cmd (vec cmd)}}))
+
+(defn- run-linter
+  "Shell out to `cmd` in the repo root and turn its output into a payload."
+  [{:keys [title] :as linter} cmd]
+  (let [{:keys [exit out err]}
+        (apply sh/sh (concat (mapv str cmd)
+                             [:dir (str (repo/repo-root))
+                              :env (subprocess-env)]))
+        out (str out)
+        err (str err)
+        findings (attach-source (parse-findings out))]
+    (if (and (not (zero? exit)) (empty? findings))
+      (error-payload title cmd exit
+                     (str/trim (or (not-empty err) (not-empty out) "linter failed"))
+                     :stdout out :stderr err)
+      (findings-payload linter cmd exit out err findings))))
+
 (defn compute!
   "Run one linter and return a jobs cache payload."
   [linter-key]
-  (let [{:keys [name title] :as linter} (get linters linter-key)
+  (let [{:keys [title] :as linter} (get linters linter-key)
         cmd (resolve-cmd linter)]
     (if (nil? cmd)
-      (let [msg (str name " is not available: "
-                     (if (= :bb (:kind linter))
-                       "babashka ('bb') was not found on PATH."
-                       "no Python interpreter found."))]
-        {:status "error"
-         :cmd []
-         :exit 1
-         :stdout ""
-         :stderr msg
-         :error msg
-         :html (error-html title msg)
-         :summary nil
-         :data {:findings [] :error msg}})
+      (error-payload title [] 1 (unavailable-msg linter))
       (try
-        (let [{:keys [exit out err]}
-              (apply sh/sh (concat (mapv str cmd)
-                                   [:dir (str (repo/repo-root))
-                                    :env (subprocess-env)]))
-              out (str out)
-              err (str err)
-              findings (attach-source (parse-findings out))
-              summary (summarize findings)
-              file-count (count (distinct (map :file findings)))
-              short (str name ": " (:count summary) " findings across "
-                         file-count " file" (when (not= 1 file-count) "s") ".")]
-          (if (and (not (zero? exit)) (empty? findings))
-            (let [msg (str (str/trim (or (not-empty err) (not-empty out) "linter failed")))]
-              {:status "error"
-               :cmd (vec cmd)
-               :exit exit
-               :stdout out
-               :stderr err
-               :error msg
-               :html (error-html title msg)
-               :summary nil
-               :data {:findings [] :error msg}})
-            {:status "ok"
-             :cmd (vec cmd)
-             :exit exit
-             :stdout short
-             :stderr err
-             :html (findings-html findings)
-             :summary summary
-             :data {:findings findings
-                    :summary summary
-                    :raw out
-                    :cmd (vec cmd)}}))
+        (run-linter linter cmd)
         (catch Exception e
-          (let [msg (or (ex-message e) (.getMessage e) (str e))]
-            {:status "error"
-             :cmd (vec cmd)
-             :exit 1
-             :stdout ""
-             :stderr msg
-             :error msg
-             :html (error-html title msg)
-             :summary nil
-             :data {:findings [] :error msg}}))))))
+          (error-payload title cmd 1 (or (ex-message e) (str e))))))))

@@ -106,16 +106,19 @@
     (filterv #(contains? (:tracked sm) (normalize-path %)) paths)
     (vec paths)))
 
+(defn- annotate-node
+  "Assoc :git-status from status map `sm` on `node` and its descendants."
+  [sm node]
+  (-> node
+      (assoc :git-status (status-for-map sm (:path node)))
+      (update :children #(mapv (partial annotate-node sm) %))))
+
 (defn annotate-tree
   "Assoc :git-status on every node of a repo tree (nested maps). Returns the
   tree unchanged when git is unavailable."
   [tree]
   (if-let [sm (status-map)]
-    (letfn [(walk [node]
-              (-> node
-                  (assoc :git-status (status-for-map sm (:path node)))
-                  (update :children #(mapv walk %))))]
-      (walk tree))
+    (annotate-node sm tree)
     tree))
 
 (defn annotate-entries

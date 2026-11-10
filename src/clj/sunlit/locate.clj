@@ -112,61 +112,61 @@
 
 (def ^:private max-block-lines 600)
 
+(defn- scan-line
+  "Scan one `line` for delimiters, starting from the carried-over
+  `depth`/`opened?`/`in-block?` state (strings never span lines).
+  Returns [depth opened? in-block? done?]; done? means the block closed
+  on this line. See `balanced-end` for the syntax options."
+  [^String line depth opened? in-block?
+   {:keys [opens closes line-comment block-comments? strings
+           char-escape stop-on-semicolon?]}]
+  (let [n (count line)]
+    (loop [j 0 depth depth opened? opened? in-block? in-block? in-str nil]
+      (if (>= j n)
+        [depth opened? in-block? false]
+        (let [c (.charAt line j)
+              nxt (when (< (inc j) n) (.charAt line (inc j)))]
+          (cond
+            in-block?
+            (if (and (= c \*) (= nxt \/))
+              (recur (+ j 2) depth opened? false in-str)
+              (recur (inc j) depth opened? true in-str))
+            in-str
+            (cond
+              (= c \\) (recur (+ j 2) depth opened? in-block? in-str)
+              (= c in-str) (recur (inc j) depth opened? in-block? nil)
+              :else (recur (inc j) depth opened? in-block? in-str))
+            (and char-escape (= c char-escape))
+            (recur (+ j 2) depth opened? in-block? nil)
+            (and line-comment (str/starts-with? (subs line j) line-comment))
+            [depth opened? in-block? false]
+            (and block-comments? (= c \/) (= nxt \*))
+            (recur (+ j 2) depth opened? true nil)
+            (contains? strings c)
+            (recur (inc j) depth opened? in-block? c)
+            (and stop-on-semicolon? (not opened?) (= c \;))
+            [0 true in-block? true]
+            (contains? opens c)
+            (recur (inc j) (inc depth) true in-block? nil)
+            (contains? closes c)
+            (let [d (dec depth)]
+              (if (and opened? (<= d 0))
+                [0 true in-block? true]
+                (recur (inc j) d opened? in-block? nil)))
+            :else (recur (inc j) depth opened? in-block? nil)))))))
+
 (defn- balanced-end
   "Scan from line `start` counting open/close delimiters, skipping strings and
   line comments. Returns the line index where depth returns to zero, or nil.
-  When `stop-on-semicolon?`, a `;` before any opener means a one-line
-  declaration (returns start)."
-  [lines start {:keys [opens closes line-comment block-comments? strings
-                       char-escape stop-on-semicolon?]}]
+  `syntax` keys: :opens :closes :line-comment :block-comments? :strings
+  :char-escape :stop-on-semicolon?. When `stop-on-semicolon?`, a `;` before
+  any opener means a one-line declaration (returns start)."
+  [lines start syntax]
   (let [limit (min (count lines) (+ start max-block-lines))]
     (loop [i start depth 0 opened? false in-block? false]
       (when (< i limit)
-        (let [line (nth lines i)
-              n (count line)
-              [depth opened? in-block? done?]
-              (loop [j 0 depth depth opened? opened? in-block? in-block? in-str nil]
-                (if (>= j n)
-                  [depth opened? in-block? false]
-                  (let [c (.charAt ^String line j)
-                        nxt (when (< (inc j) n) (.charAt ^String line (inc j)))]
-                    (cond
-                      in-block?
-                      (if (and (= c \*) (= nxt \/))
-                        (recur (+ j 2) depth opened? false in-str)
-                        (recur (inc j) depth opened? true in-str))
-
-                      in-str
-                      (cond
-                        (= c \\) (recur (+ j 2) depth opened? in-block? in-str)
-                        (= c in-str) (recur (inc j) depth opened? in-block? nil)
-                        :else (recur (inc j) depth opened? in-block? in-str))
-
-                      (and char-escape (= c char-escape))
-                      (recur (+ j 2) depth opened? in-block? nil)
-
-                      (and line-comment (str/starts-with? (subs line j) line-comment))
-                      [depth opened? in-block? false]
-
-                      (and block-comments? (= c \/) (= nxt \*))
-                      (recur (+ j 2) depth opened? true nil)
-
-                      (contains? strings c)
-                      (recur (inc j) depth opened? in-block? c)
-
-                      (and stop-on-semicolon? (not opened?) (= c \;))
-                      [0 true in-block? true]
-
-                      (contains? opens c)
-                      (recur (inc j) (inc depth) true in-block? nil)
-
-                      (contains? closes c)
-                      (let [d (dec depth)]
-                        (if (and opened? (<= d 0))
-                          [0 true in-block? true]
-                          (recur (inc j) d opened? in-block? nil)))
-
-                      :else (recur (inc j) depth opened? in-block? nil)))))]
+        (let [[depth opened? in-block? done?]
+              (scan-line (nth lines i) depth opened? in-block? syntax)]
           (if done?
             i
             (recur (inc i) depth opened? in-block?)))))))
@@ -219,6 +219,15 @@
     (when (seq hits)
       (apply min-key #(indent-of (nth lines %)) (reverse hits)))))
 
+(defn- found-range
+  "{:line :end :exact} (1-based) for a hit at line index `idx`, or nil.
+  Exact hits (definitions) extend to the end of their block."
+  [lines language idx exact?]
+  (when idx
+    {:line (inc idx)
+     :end (inc (if exact? (block-end lines idx language) idx))
+     :exact exact?}))
+
 (defn find-symbol
   "Resolve `sym` to {:line :end :exact} (1-based, inclusive) in `content`.
   :exact is false when only a plain occurrence (not a definition) was found.
@@ -226,11 +235,7 @@
   [content language sym]
   (let [sym (str/trim (str sym))
         lines (str/split-lines (or content ""))
-        found (fn [idx exact?]
-                (when idx
-                  {:line (inc idx)
-                   :end (inc (if exact? (block-end lines idx language) idx))
-                   :exact exact?}))]
+        found #(found-range lines language %1 %2)]
     (when-not (str/blank? sym)
       (or (found (find-definition lines language sym 0) true)
           (when-let [[container member] (split-qualified language sym)]

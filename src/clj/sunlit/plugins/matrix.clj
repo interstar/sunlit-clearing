@@ -243,6 +243,62 @@
       (pos? (or (:others auto) 0)) (assoc :others (:others auto))
       (and (= status "missing") (not chk)) (assoc :expected (expected-path compiled coords)))))
 
+(defn- pattern-matches
+  "Per compiled pattern, the [{:path :coords}] of `files` it matches."
+  [compiled files]
+  (mapv (fn [cp]
+          (vec (keep #(when-let [c (match-file cp %)] {:path % :coords c}) files)))
+        compiled))
+
+(defn- auto-values
+  "Sorted distinct values bound to dimension `n` across all matches."
+  [matches n]
+  (->> matches (apply concat) (keep #(get-in % [:coords n])) distinct sort vec))
+
+(defn- resolve-dims
+  "Fill in :values for :auto dims (those declared without values) from matches."
+  [declared matches]
+  (mapv (fn [d] (assoc d :auto (nil? (:values d))
+                       :values (or (:values d) (auto-values matches (:name d)))))
+        declared))
+
+(defn- unknown-dims
+  "Dimension names whose value in `coords` is not among the `known` values."
+  [known coords]
+  (vec (for [[k v] coords :when (not (contains? (known k) v))] k)))
+
+(defn- find-orphans
+  "Matched files not used by any pattern with known coordinates, one entry
+  per path. (A file read via a fallback pattern, e.g.
+  handlers/default/draw.clj, counts as used.)"
+  [all-matches known]
+  (let [used (set (keep #(when (empty? (unknown-dims known (:coords %))) (:path %))
+                        all-matches))]
+    (->> all-matches
+         (remove #(used (:path %)))
+         (map (fn [{:keys [path coords]}]
+                {:path path :coords coords :unknown (unknown-dims known coords)}))
+         (reduce (fn [acc o] (if (some #(= (:path %) (:path o)) acc) acc (conj acc o))) []))))
+
+(defn- config-errors
+  "Human-readable problems with the matrix config."
+  [{:keys [check-error declared unknown-slots resolved-dims bad stray-manual]}]
+  (let [empty-auto (filter #(and (:auto %) (empty? (:values %))) resolved-dims)]
+    (cond-> []
+      check-error
+      (conj (str ":check failed to load: " check-error))
+      (empty? declared)
+      (conj "No :dims given.")
+      (seq unknown-slots)
+      (conj (str "Pattern uses unknown dimension(s): " (str/join ", " unknown-slots)))
+      (seq empty-auto)
+      (conj (str ":auto dimension(s) found no values: " (str/join ", " (map :name empty-auto))))
+      (seq bad)
+      (conj (str "Ignored " (count bad) " :manual entr" (if (= 1 (count bad)) "y" "ies")
+                 " with the wrong number of coordinates: " (pr-str (vec bad))))
+      (seq stray-manual)
+      (conj (str ":manual entries for coordinates not in :dims: " (pr-str stray-manual))))))
+
 (defn evaluate
   "Pure-ish evaluation of a matrix config against `files` (repo-relative
   paths). Returns the model used for both HTML and agent :data.
@@ -251,20 +307,8 @@
   (let [declared (dims params)
         dim-names (mapv :name declared)
         compiled (mapv compile-pattern (pattern-list params))
-        matches (mapv (fn [cp]
-                        (vec (keep #(when-let [c (match-file cp %)] {:path % :coords c})
-                                   files)))
-                      compiled)
-        unknown-slots (->> compiled
-                           (mapcat #(concat (:slots %) (:anchor-slots %)))
-                           (remove (set dim-names))
-                           distinct)
-        auto-values (fn [n]
-                      (->> matches (apply concat) (keep #(get-in % [:coords n]))
-                           distinct sort vec))
-        resolved-dims (mapv (fn [d] (assoc d :auto (nil? (:values d))
-                                           :values (or (:values d) (auto-values (:name d)))))
-                            declared)
+        matches (pattern-matches compiled files)
+        resolved-dims (resolve-dims declared matches)
         {manual :entries bad :bad} (manual-entries params dim-names)
         manual-mode (and (empty? compiled) (nil? check))
         ctx {:compiled compiled :matches matches :dim-names dim-names
@@ -272,36 +316,17 @@
              :manual-mode manual-mode}
         cells (mapv #(resolve-cell ctx %) (cartesian resolved-dims))
         known (into {} (map (juxt :name (comp set :values)) resolved-dims))
-        unknown-dims (fn [coords]
-                       (vec (for [[k v] coords :when (not (contains? (known k) v))] k)))
-        all-matches (apply concat matches)
-        ;; a file is used if any pattern reads it with known coordinates
-        ;; (e.g. handlers/default/draw.clj via a fallback pattern)
-        used (set (keep #(when (empty? (unknown-dims (:coords %))) (:path %)) all-matches))
-        orphans (->> all-matches
-                     (remove #(used (:path %)))
-                     (map (fn [{:keys [path coords]}]
-                            {:path path :coords coords :unknown (unknown-dims coords)}))
-                     (reduce (fn [acc o] (if (some #(= (:path %) (:path o)) acc) acc (conj acc o))) []))
-        stray-manual (vec (for [c (keys manual)
-                                :when (some (fn [[k v]] (not (contains? (known k) v))) c)]
-                            c))
-        errors (cond-> []
-                 check-error
-                 (conj (str ":check failed to load: " check-error))
-                 (empty? declared)
-                 (conj "No :dims given.")
-                 (seq unknown-slots)
-                 (conj (str "Pattern uses unknown dimension(s): " (str/join ", " unknown-slots)))
-                 (some #(and (:auto %) (empty? (:values %))) resolved-dims)
-                 (conj (str ":auto dimension(s) found no values: "
-                            (str/join ", " (map :name (filter #(and (:auto %) (empty? (:values %)))
-                                                              resolved-dims)))))
-                 (seq bad)
-                 (conj (str "Ignored " (count bad) " :manual entr" (if (= 1 (count bad)) "y" "ies")
-                            " with the wrong number of coordinates: " (pr-str (vec bad))))
-                 (seq stray-manual)
-                 (conj (str ":manual entries for coordinates not in :dims: " (pr-str stray-manual))))]
+        errors (config-errors
+                {:check-error check-error
+                 :declared declared
+                 :unknown-slots (->> compiled
+                                     (mapcat #(concat (:slots %) (:anchor-slots %)))
+                                     (remove (set dim-names))
+                                     distinct)
+                 :resolved-dims resolved-dims
+                 :bad bad
+                 :stray-manual (filterv #(seq (unknown-dims known %)) (keys manual))})
+        orphans (find-orphans (apply concat matches) known)]
     {:dims resolved-dims
      :manual-mode manual-mode
      :cells cells

@@ -56,6 +56,46 @@
   [run-result cache-status]
   (if (run-failed? run-result) "error" cache-status))
 
+(defn- content-fields
+  "Output fields of a plugin result, preferring the fresh run over the cache."
+  [name run-result cache]
+  (let [finished-at (:finished_at cache)]
+    {:started_at (:started_at cache)
+     :finished_at finished-at
+     :age_seconds (age-seconds finished-at)
+     :cmd (:cmd cache)
+     :exit (:exit cache)
+     :data (or (:data run-result)
+               (:data cache)
+               (derived-data name cache)
+               (:summary cache))
+     :text (or (:text run-result)
+               (:text cache)
+               (:markdown run-result)
+               (:markdown cache))
+     :markdown (or (:markdown run-result) (:markdown cache))
+     :html (or (:html run-result) (:html cache))
+     :stdout (:stdout cache)
+     :stderr (:stderr cache)}))
+
+(defn- long-running-state
+  "Cache, running/stale flags and any background launch for a long-running
+  plugin. A launch happens when the cache is never/error or stale, or on
+  `refresh?`, and only when the plugin is cache-backed and not already running."
+  [name run-result {:keys [params id path refresh?]}]
+  (let [cache (or (:cache run-result) (jobs/read-cache name id))
+        cache-status (or (:status run-result) (:status cache) "never")
+        running? (jobs/running? name id)
+        stale? (stale-cache? cache-status cache)
+        launch? (and (:cache_id run-result) (not running?) (or refresh? stale?))
+        launch-result (when launch?
+                        (plugins/start-plugin! name {:params (assoc params :id id) :path path}))]
+    {:cache cache
+     :cache-status cache-status
+     :running (boolean (or running? (and launch? (:ok launch-result))))
+     :stale (boolean stale?)
+     :launch-error (:error launch-result)}))
+
 (defn plugin-result
   "The /agents/ shape for one plugin invocation.
 
@@ -68,47 +108,22 @@
           long-running? (boolean (or (:long-running? p) (:start! p)))
           run-result (plugins/run-plugin name {:params params :path path})
           id (or id (:cache_id run-result) "default")
-          cache (when long-running?
-                  (or (:cache run-result) (jobs/read-cache name id)))
-          cache-status (or (:status run-result) (:status cache)
-                           (if long-running? "never" "ok"))
-          running? (if long-running? (jobs/running? name id) false)
-          cache-backed? (boolean (:cache_id run-result))
-          stale? (and long-running? (stale-cache? cache-status cache))
-          should-launch? (and long-running?
-                              cache-backed?
-                              (not running?)
-                              (or refresh? stale?))]
-      (let [launch-result (when should-launch?
-                            (plugins/start-plugin! name {:params (assoc params :id id) :path path}))
-            launched? (and should-launch? (:ok launch-result))
-            finished-at (:finished_at cache)]
-        {:ok (not (run-failed? run-result))
-         :name (str name)
-         :id id
-         :long_running long-running?
-         :status (run-status run-result cache-status)
-         :running (if long-running? (or running? launched?) false)
-         :started_at (:started_at cache)
-         :finished_at finished-at
-         :age_seconds (age-seconds finished-at)
-         :stale (boolean stale?)
-         :cmd (:cmd cache)
-         :exit (:exit cache)
-         :data (or (:data run-result)
-                   (:data cache)
-                   (derived-data name cache)
-                   (:summary cache))
-         :text (or (:text run-result)
-                   (:text cache)
-                   (:markdown run-result)
-                   (:markdown cache))
-         :markdown (or (:markdown run-result) (:markdown cache))
-         :html (or (:html run-result) (:html cache))
-         :stdout (:stdout cache)
-         :stderr (:stderr cache)
-         :error (or (:error run-result) (:error launch-result))
-         :agent_url (str "/agents/plugin/" (url-encode (str name)) "/" (url-encode id))}))
+          {:keys [cache cache-status running stale launch-error]}
+          (if long-running?
+            (long-running-state name run-result
+                                {:params params :id id :path path :refresh? refresh?})
+            {:cache-status (or (:status run-result) "ok") :running false :stale false})]
+      (merge
+       {:ok (not (run-failed? run-result))
+        :name (str name)
+        :id id
+        :long_running long-running?
+        :status (run-status run-result cache-status)
+        :running running
+        :stale stale
+        :error (or (:error run-result) launch-error)
+        :agent_url (str "/agents/plugin/" (url-encode (str name)) "/" (url-encode id))}
+       (content-fields name run-result cache)))
     {:ok false :error (str "Unknown plugin: " name) :name name}))
 
 (defn- dedupe-results [results]
