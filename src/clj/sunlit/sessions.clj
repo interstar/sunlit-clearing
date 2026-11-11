@@ -1,56 +1,21 @@
 (ns sunlit.sessions
-  "Agent sessions via eyeball_kid, cached under .sunlit/cache/sessions/."
+  "The repo's agent sessions (Codex, Pi, Claude Code, Cursor), collected by
+  sunlit.sessions.engine and cached under .sunlit/cache/sessions/: an
+  index.json of session entries plus one details/<id>.json transcript per
+  session. Reads (list, show, search, stats, export) only touch the cache;
+  `refresh!` rebuilds it in the background."
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
-            [clojure.java.shell :as sh]
             [clojure.string :as str]
             [sunlit.jobs :as jobs]
-            [sunlit.repo :as repo])
+            [sunlit.repo :as repo]
+            [sunlit.sessions.common :as common]
+            [sunlit.sessions.engine :as engine])
   (:import [java.io File]
-           [java.time Instant]))
+           [java.time Instant LocalDate]))
 
-(def ^:private bridge-script
-  (delay
-    (let [from-cwd (io/file (System/getProperty "user.dir") "scripts" "sessions_bridge.py")
-          sibling (io/file (.getParentFile from-cwd) "cursor_sessions.py")]
-      (cond
-        (and (.exists from-cwd) (.exists sibling))
-        (.getAbsolutePath from-cwd)
-
-        (and (io/resource "scripts/sessions_bridge.py")
-             (io/resource "scripts/cursor_sessions.py"))
-        (let [dir (File/createTempFile "sunlit-scripts" nil)]
-          (.delete dir)
-          (.mkdirs dir)
-          (spit (io/file dir "sessions_bridge.py")
-                (slurp (io/resource "scripts/sessions_bridge.py")))
-          (spit (io/file dir "cursor_sessions.py")
-                (slurp (io/resource "scripts/cursor_sessions.py")))
-          (.getAbsolutePath (io/file dir "sessions_bridge.py")))
-
-        (.exists from-cwd)
-        (.getAbsolutePath from-cwd)
-
-        :else "scripts/sessions_bridge.py"))))
-
-(defn- python-bin []
-  (or (System/getenv "SUNLIT_PYTHON")
-      (let [shared (str (System/getProperty "user.home") "/.main_python_venv/bin/python")]
-        (if (.exists (io/file shared)) shared "python3"))))
-
-(defn- run-bridge [args]
-  (let [cmd (into [(python-bin) @bridge-script] args)
-        {:keys [exit out err]} (apply sh/sh cmd)
-        parsed (try
-                 (json/parse-string out true)
-                 (catch Exception _
-                   nil))]
-    (cond
-      (map? parsed) parsed
-      (zero? exit) {:ok false :error (str "Unexpected bridge output: " out)}
-      :else {:ok false
-             :error (str/trim (or (not-empty err) (not-empty out) "sessions bridge failed"))
-             :exit exit})))
+;; ---------------------------------------------------------------------------
+;; Cache files
 
 (defn- cache-root []
   (repo/sidecar-file "cache" "sessions"))
@@ -58,16 +23,16 @@
 (defn- index-file []
   (io/file (cache-root) "index.json"))
 
+(defn- details-dir []
+  (io/file (cache-root) "details"))
+
 (defn- detail-file [session-id]
   (let [safe (-> (str session-id)
                  (str/replace #"[^A-Za-z0-9._-]+" "_")
                  (#(if (str/blank? %) "unknown" %)))]
-    (io/file (cache-root) "details" (str safe ".json"))))
+    (io/file (details-dir) (str safe ".json"))))
 
-(defn- now-iso []
-  (str (Instant/now)))
-
-(defn- read-json-file [f]
+(defn- read-json-file [^File f]
   (when (.isFile f)
     (try
       (json/parse-string (slurp f) true)
@@ -83,47 +48,59 @@
   []
   (read-json-file (index-file)))
 
-(defn- write-index! [data]
-  (write-json-file! (index-file) data))
-
-(defn- write-detail! [session-id detail]
-  (write-json-file! (detail-file session-id) detail))
-
 (defn- clear-details!
   "Remove previously cached transcripts so deleted sessions disappear."
   []
-  (let [dir (io/file (cache-root) "details")]
-    (when (.isDirectory dir)
-      (doseq [f (.listFiles dir)]
-        (when (.isFile f)
-          (.delete f))))))
+  (doseq [^File f (.listFiles (details-dir))
+          :when (.isFile f)]
+    (.delete f)))
+
+(defn- cached-transcripts
+  "Every cached transcript ({:session :messages})."
+  []
+  (->> (common/children (details-dir))
+       (keep read-json-file)
+       (filter :session)))
+
+;; ---------------------------------------------------------------------------
+;; Rebuild
 
 (defn rebuild-cache!
-  "Slow path: one eyeball dump, then write index + per-session transcripts."
+  "Slow path: collect every session run in the repo, then write the index and
+  one transcript file per session."
   []
-  (let [root (str (.getCanonicalFile (repo/repo-root)))
-        result (run-bridge ["dump" root])]
-    (if-not (:ok result false)
-      (throw (ex-info (or (:error result) "sessions dump failed")
-                      {:result result}))
-      (let [sessions (vec (:sessions result []))
-            details (:details result {})
-            cached-at (now-iso)
-            index {:ok true
-                   :cached true
-                   :cached_at cached-at
-                   :repo (:repo result root)
-                   :sessions sessions
-                   :count (count sessions)}]
-        (clear-details!)
-        (write-index! index)
-        (doseq [[sid detail] details]
-          (write-detail! (name sid) (assoc detail :cached_at cached-at)))
-        {:stdout (str "Cached " (count sessions) " sessions at " cached-at)
-         :summary {:count (count sessions) :cached_at cached-at}}))))
+  (let [{:keys [repo transcripts warnings]} (engine/collect-for-repo (repo/repo-root))
+        cached-at (str (Instant/now))
+        sessions (mapv :session transcripts)]
+    (clear-details!)
+    (write-json-file! (index-file) {:ok true
+                                    :cached true
+                                    :cached_at cached-at
+                                    :repo repo
+                                    :sessions sessions
+                                    :count (count sessions)
+                                    :warnings warnings})
+    (doseq [t transcripts]
+      (write-json-file! (detail-file (get-in t [:session :session_id]))
+                        (assoc t :ok true :cached_at cached-at)))
+    {:stdout (str "Cached " (count sessions) " sessions at " cached-at
+                  (when (seq warnings) (str " (" (str/join "; " warnings) ")")))
+     :summary {:count (count sessions) :cached_at cached-at}}))
+
+(defn refresh!
+  "Background rebuild of the session cache."
+  []
+  (jobs/start-compute!
+   {:plugin "sessions"
+    :id "index"
+    :label "sessions-refresh"
+    :compute! rebuild-cache!}))
+
+;; ---------------------------------------------------------------------------
+;; Reads (cache only)
 
 (defn list-for-repo
-  "Fast path: read .sunlit cache. Never hits eyeball unless refreshing."
+  "Fast path: the cached index, with the refresh job's status."
   []
   (let [running? (jobs/running? "sessions" "index")
         idx (read-index)
@@ -149,38 +126,59 @@
        :sessions []
        :message "No session cache yet. Click Refresh to scan agent sessions into .sunlit/cache/sessions/."})))
 
-(defn show
-  "Read a cached transcript. Does not call eyeball live."
+(def ^:private not-cached
+  {:ok false :error "Session not in cache. Open Sessions and click Refresh."})
+
+(defn- resolve-id
+  "`session-id`, or the one cached id containing it; else an error map."
   [session-id]
-  (or (when-let [detail (read-json-file (detail-file session-id))]
-        (assoc detail :cached true))
-      ;; Partial id match against cached index
-      (when-let [idx (read-index)]
-        (let [matches (->> (:sessions idx)
-                           (map :session_id)
-                           (filter #(str/includes? (str %) (str session-id)))
-                           vec)]
-          (cond
-            (= 1 (count matches))
-            (or (read-json-file (detail-file (first matches)))
-                {:ok false :error (str "Index has " (first matches) " but detail cache is missing. Refresh.")})
+  (if (.isFile ^File (detail-file session-id))
+    session-id
+    (let [matches (->> (:sessions (read-index))
+                       (map :session_id)
+                       (filter #(str/includes? (str %) (str session-id)))
+                       vec)]
+      (case (count matches)
+        0 not-cached
+        1 (first matches)
+        {:ok false :error (str "Ambiguous session id in cache: " session-id) :matches matches}))))
 
-            (empty? matches)
-            {:ok false
-             :error "Session not in cache. Open Sessions and click Refresh."}
+(defn show
+  "A cached transcript, by id or unambiguous part of one."
+  [session-id]
+  (let [id (resolve-id session-id)]
+    (if (map? id)
+      id
+      (or (some-> (read-json-file (detail-file id)) (assoc :cached true))
+          {:ok false :error (str "Index has " id " but its transcript is missing. Refresh.")}))))
 
-            :else
-            {:ok false
-             :error (str "Ambiguous session id in cache: " session-id)
-             :matches matches})))
-      {:ok false
-       :error "Session not in cache. Open Sessions and click Refresh."}))
+(defn- parse-date [s]
+  (when-not (str/blank? s)
+    (try (LocalDate/parse s) (catch Exception _ nil))))
 
-(defn refresh!
-  "Background rebuild of the session cache."
+(defn search
+  "Cached messages matching `q`, best first. `params` (strings, as from a
+  query string): role, from / to (YYYY-MM-DD), limit."
+  [q {:keys [role from to limit]}]
+  {:ok true
+   :query q
+   :hits (engine/search-messages (cached-transcripts) q
+                                 {:role (not-empty role)
+                                  :from (parse-date from)
+                                  :to (parse-date to)
+                                  :limit (or (some-> limit parse-long) 200)})})
+
+(defn stats
+  "Counts over the cached sessions."
   []
-  (jobs/start-compute!
-   {:plugin "sessions"
-    :id "index"
-    :label "sessions-refresh"
-    :compute! rebuild-cache!}))
+  (assoc (engine/stats (cached-transcripts)) :ok true))
+
+(defn export-markdown
+  "{:ok true :filename :markdown} for a cached session, else an error map."
+  [session-id]
+  (let [t (show session-id)]
+    (if (:ok t)
+      {:ok true
+       :filename (str (str/replace (get-in t [:session :session_id]) #"[^A-Za-z0-9._-]+" "_") ".md")
+       :markdown (engine/export-markdown t)}
+      t)))

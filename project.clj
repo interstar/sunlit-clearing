@@ -18,6 +18,8 @@
                  [rewrite-clj "1.1.47"]
                  [org.clojure/tools.cli "1.1.230"]
                  [org.clojure/tools.reader "1.4.2"]
+                 ;; read-only access to Cursor's chat stores (agent sessions)
+                 [org.xerial/sqlite-jdbc "3.46.1.0"]
                  [com.bhauman/figwheel-main "0.2.18"]]
   :plugins [[lein-cljsbuild "1.1.8"]
             [lein-cloverage "1.2.4"]]

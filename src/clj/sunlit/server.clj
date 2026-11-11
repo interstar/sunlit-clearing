@@ -230,6 +230,22 @@
   (POST "/api/sessions/refresh" []
     (json-response (sessions/refresh!)))
 
+  (GET "/api/sessions/search" [q role from to limit]
+    (json-response (sessions/search q {:role role :from from :to to :limit limit})))
+
+  (GET "/api/sessions/stats" []
+    (json-response (sessions/stats)))
+
+  (GET "/api/sessions/:id/export.md" [id]
+    (let [{:keys [ok filename markdown] :as result} (sessions/export-markdown id)]
+      (if ok
+        {:status 200
+         :headers {"Content-Type" "text/markdown; charset=utf-8"
+                   "Content-Disposition" (str "attachment; filename=\"" filename "\"")
+                   "Cache-Control" "no-store"}
+         :body markdown}
+        (json-response result 404))))
+
   (GET "/api/sessions/:id" [id]
     (json-response (sessions/show id)))
 
@@ -295,7 +311,8 @@
   (ann/ensure-store!)
   (pages/ensure-store!)
   (plugins/init!)
-  (let [s (http/run-server app {:port port :join? false})]
+  ;; Loopback only: pages expose source and agent transcripts, so never the LAN.
+  (let [s (http/run-server app {:ip "127.0.0.1" :port port :join? false})]
     (reset! server* s)
     (println (str "Sunlit Clearing listening on http://localhost:" port))
     (println (str "Repository: " (repo/repo-root)))

@@ -761,6 +761,42 @@
    (when (and (:title s) (:cwd s))
      [:div.slug.muted (:cwd s)])])
 
+(defn- search-hit [{:keys [session_id source role timestamp snippet]}]
+  [:li
+   [:a {:href (str "#/session/" (js/encodeURIComponent session_id))}
+    [:span.when (or timestamp "")]
+    [:span.source {:class (str "src-" source)} source]
+    [:span.count role]]
+   [:div.slug snippet]])
+
+(defn- run-search! [state]
+  (let [q (str/trim (:q @state))]
+    (if (str/blank? q)
+      (swap! state assoc :hits nil :error nil)
+      (do (swap! state assoc :searching true)
+          (api/get-json (str "/api/sessions/search?q=" (js/encodeURIComponent q))
+                        #(swap! state assoc :searching false :hits (:hits %) :error nil)
+                        #(swap! state assoc :searching false :error %))))))
+
+(defn- session-search
+  "Search box over the cached transcripts, with its hits."
+  []
+  (let [state (r/atom {:q ""})]
+    (fn []
+      (let [{:keys [q hits searching error]} @state]
+        [:div.session-search
+         [:form {:on-submit (fn [e] (.preventDefault e) (run-search! state))}
+          [:input {:type "search" :placeholder "Search transcripts…" :value q
+                   :on-change #(swap! state assoc :q (.. % -target -value))}]
+          [:button.btn-ghost {:type "submit" :disabled searching} (if searching "Searching…" "Search")]]
+         (cond
+           error [:p.error error]
+           (nil? hits) nil
+           (empty? hits) [:p.muted "No messages match."]
+           :else [:ul.session-list
+                  (for [[i h] (map-indexed vector hits)]
+                    ^{:key i} [search-hit h])])]))))
+
 (defn sessions-page [st navigate! reload! refresh!]
   (let [data (:sessions st)
         running? (= "running" (:status data))]
@@ -787,22 +823,26 @@
 
        (and (false? (:ok data)) (empty? (:sessions data)))
        [:div
-        [:p.error (or (:error data) "Could not load sessions")]
-        [:p.muted "Sessions are cached from Codex / Cursor / Pi via scripts/sessions_bridge.py."]]
+        [:p.error (or (:error data) "Could not load sessions")]]
 
        (= "never" (:status data))
        [:div
         [:p.muted (or (:message data)
                       "No session cache yet.")]
-        [:p.muted "Click Refresh cache to scan Codex / Cursor / Pi sessions for this repo."]]
+        [:p.muted "Click Refresh cache to scan Codex / Cursor / Pi / Claude Code sessions for this repo."]]
 
        :else
-       [:ul.session-list
-        (if (empty? (:sessions data))
-          [:li.muted "No agent sessions found for this repository."]
-          (for [s (:sessions data)]
-            ^{:key (:session_id s)}
-            [session-list-item s]))])]))
+       [:<>
+        (for [w (:warnings data)]
+          ^{:key w} [:p.error (str "Could not read " w)])
+        (when (seq (:sessions data))
+          [session-search])
+        [:ul.session-list
+         (if (empty? (:sessions data))
+           [:li.muted "No agent sessions found for this repository."]
+           (for [s (:sessions data)]
+             ^{:key (:session_id s)}
+             [session-list-item s]))]])]))
 
 (defn session-page [st navigate!]
   (let [data (:session st)]
@@ -811,7 +851,11 @@
       [:div
        [:p.crumb [:a {:href "#/sessions"} "Sessions"] " / detail"]
        [:h1 "Session"]]
-      [:button.btn-ghost {:on-click #(js/history.back)} "Back"]]
+      [:div.btn-row
+       (when-let [sid (get-in data [:session :session_id])]
+         [:a.btn-ghost {:href (str "/api/sessions/" (js/encodeURIComponent sid) "/export.md")}
+          "Export Markdown"])
+       [:button.btn-ghost {:on-click #(js/history.back)} "Back"]]]
      (cond
        (or (nil? data) (:loading data))
        [:p.muted "Loading transcript…"]
