@@ -25,7 +25,8 @@
             [lein-cloverage "1.2.4"]]
   :source-paths ["src/clj"]
   :test-paths ["test"]
-  :resource-paths ["resources"]
+  ;; docs/ is on the classpath so the guides can be served as built-in wiki pages
+  :resource-paths ["resources" "docs"]
   :main ^:skip-aot sunlit.core
   :target-path "target/%s"
   :clean-targets ^{:protect false} ["resources/public/js/compiled"

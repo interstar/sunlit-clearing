@@ -50,5 +50,4 @@
     {:key "status"  :required true :enum ["open" "closed"]}
     {:key "labels"  :required true :multiple true}
     {:key "created" :required true :pattern "^\\d{4}-\\d{2}-\\d{2}$"}
-    {:key "closed"  :required false :pattern "^\\d{4}-\\d{2}-\\d{2}$"}
-    {:key "git-bug" :required false}]}]}
+    {:key "closed"  :required false :pattern "^\\d{4}-\\d{2}-\\d{2}$"}]}]}

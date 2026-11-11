@@ -182,7 +182,11 @@ Such plugins have two functions:
   clicks Rerun (or when an agent asks for a fresh result).
 
 Results are stored in `.sunlit/cache/plugins/<plugin>/<id>/`, so they survive
-restarts. `sunlit.jobs` provides the machinery.
+restarts. Each finished run is also added to the run log,
+`.sunlit/cache/runs.jsonl`, which the `overview` plugin reads, so a new
+background plugin appears in the overview without any extra work. If your
+`:compute!` result has a small `:summary` map (like `{:passed 12 :failed 0}`),
+it is logged too and shown in the overview. `sunlit.jobs` provides the machinery.
 
 **Running a shell command.** `jobs/start!` runs a command in the repo root,
 saving its exit code and output; `jobs/render-panel` draws the standard panel
@@ -259,6 +263,20 @@ survive. See `update-params` in `src/clj/sunlit/plugins/matrix.clj` and
 
 A plugin only ever changes its own fence, which lives in `.sunlit/`.
 Plugins must never modify the watched repo's own files.
+
+## Showing a fence without running it
+
+To show a plugin fence as an example in a page or annotation, as these
+guides do, wrap it in a fence of four backticks. Plugin fences inside it are
+shown as code and never run:
+
+`````markdown
+````markdown
+```plugin my-plugin
+{}
+```
+````
+`````
 
 ## Checklist
 

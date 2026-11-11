@@ -11,6 +11,42 @@
   "Group 1 = plugin name, group 2 = fence body (EDN params)."
   #"(?ms)^```plugin[ \t]+([A-Za-z0-9_./-]+)\s*\n(.*?)```")
 
+(def ^:private example-fence-re
+  "A fence of four or more backticks or tildes: an example block, which may
+  show ```plugin fences without running them."
+  #"(?ms)^(`{4,}|~{4,})[^\n]*\n.*?^\1[ \t]*$")
+
+(defn- example-spans [markdown]
+  (let [m (re-matcher example-fence-re markdown)]
+    (loop [spans []]
+      (if (.find m) (recur (conj spans [(.start m) (.end m)])) spans))))
+
+(defn live-fences
+  "{:name :body :start :end :body-start :body-end} for each ```plugin fence
+  in `markdown` that is not inside an example block, in order."
+  [markdown]
+  (let [md (or markdown "")
+        spans (example-spans md)
+        inside? (fn [i] (some (fn [[s e]] (<= s i (dec e))) spans))
+        m (re-matcher plugin-fence-re md)]
+    (loop [out []]
+      (if (.find m)
+        (recur (if (inside? (.start m))
+                 out
+                 (conj out {:name (.group m 1) :body (.group m 2)
+                            :start (.start m) :end (.end m)
+                            :body-start (.start m 2) :body-end (.end m 2)})))
+        out))))
+
+(defn- example-block-html
+  "An example fence as an escaped code block."
+  [block]
+  (let [lines (str/split-lines block)
+        lang (str/trim (str/replace (first lines) #"^[`~]+" ""))
+        body (str/join "\n" (butlast (rest lines)))
+        esc (-> body (str/replace "&" "&amp;") (str/replace "<" "&lt;") (str/replace ">" "&gt;"))]
+    (str "<pre><code" (when-not (str/blank? lang) (str " class=\"language-" lang "\"")) ">" esc "</code></pre>")))
+
 (def ^:private wiki-link-re
   #"\[\[([^\]]+)\]\]")
 
@@ -79,19 +115,26 @@
     (swap! blocks conj {:token tok :html html})
     tok))
 
+(defn- protect-examples
+  "`text` with each example fence swapped for a stored code block."
+  [text blocks]
+  (str/replace text example-fence-re
+               (fn [[block _]] (str "\n\n" (store-block! blocks (example-block-html block)) "\n\n"))))
+
 (defn- extract-protected-blocks
   "Pull plugin fences and wiki links out of markdown before md processing.
   Underscores in plugin HTML / link labels must not become <em> tags."
   [markdown path]
   (let [blocks (atom [])
-        fence-index (atom -1)
+        live (live-fences markdown)
         without-plugins
-        (str/replace
-         markdown
-         plugin-fence-re
-         (fn [[_ pname body]]
-           (let [i (swap! fence-index inc)]
-             (str "\n\n" (store-block! blocks (plugin-slot-html pname body path i)) "\n\n"))))
+        (loop [out (StringBuilder.) pos 0 [f & more] (map-indexed vector live)]
+          (if-let [[i {:keys [name body start end]}] f]
+            (recur (doto out
+                     (.append (protect-examples (subs markdown pos start) blocks))
+                     (.append (str "\n\n" (store-block! blocks (plugin-slot-html name body path i)) "\n\n")))
+                   end more)
+            (str (.append out (protect-examples (subs markdown pos) blocks)))))
         without-links
         (str/replace
          without-plugins
@@ -125,10 +168,8 @@
 (defn plugin-fences
   "Return [{:name \"…\" :params {…}}] for each ```plugin fence in markdown."
   [markdown]
-  (->> (re-seq plugin-fence-re (or markdown ""))
-       (map (fn [[_ pname body]]
-              {:name pname :params (parse-plugin-params body)}))
-       vec))
+  (mapv (fn [{:keys [name body]}] {:name name :params (parse-plugin-params body)})
+        (live-fences markdown)))
 
 (defn auto-plugin-fences
   "Return [{:name \"…\" :params {…}}] for plugins that auto-attach to a file path."

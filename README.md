@@ -38,6 +38,9 @@ The codebase is written in Clojure. And can be distributed as a runnable Uberjar
 - Built-in **matrix** plugin: a grid for matrix-shaped code (types × operations,
   apps × targets × concerns), see the [guide](docs/guide.md#3-the-matrix)
 - **Plugins** page listing built-in and repo plugins (with descriptions)
+- Built-in **overview** plugin: when tests, coverage and linters last ran, whether they
+  passed, and whether the code has changed since (see the [guide](docs/guide.md#is-everything-up-to-date))
+- Built-in **Guide** and **Writing plugins** pages (from `docs/`) in every repo
 - **Conventions** page: check the repo against a declared layout template
   (directories, files, .gitignore rules, structured-document formats) + a lightweight issues list
   (see the [guide](docs/guide.md#4-conventions-and-issues))
@@ -129,6 +132,7 @@ Client routes: `#/file/<path>?line=40-60` and `#/file/<path>?sym=name`.
   annotations/     # sidecar notes for repo files
   pages/           # free-titled wiki pages (_index = tree notes)
   cache/plugins/   # long-running plugin outputs
+  cache/runs.jsonl # log of finished runs (read by the overview plugin)
   plugins/         # optional SCI project plugins
   template.edn     # optional per-repo conventions override
   venv/            # private Python for pytest / coverage

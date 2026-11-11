@@ -22,7 +22,10 @@
      "Lint"]
     [:a {:href "#/sessions" :class (when (#{:sessions :session} (:page route)) "active")} "Sessions"]
     [:a {:href "#/agents" :class (when (= :agents (:page route)) "active")} "Agents"]
-    [:a {:href "#/plugins" :class (when (= :plugins (:page route)) "active")} "Plugins"]]
+    [:a {:href "#/plugins" :class (when (= :plugins (:page route)) "active")} "Plugins"]
+    [:a {:href "#/page/Guide"
+         :class (when (and (= :wiki (:page route)) (#{"Guide" "Writing plugins"} (:name route))) "active")}
+     "Guide"]]
    [:div.nav-actions
     [:button.btn-ghost {:on-click #(js/history.back)} "Back"]
     [:button.btn-ghost {:on-click #(js/history.forward)} "Forward"]]])
@@ -287,6 +290,30 @@
                                      :status (if (.-checked box) "done" "")}
                                     on-done))))
             (set! (.-ondblclick td) (fn [e] (.preventDefault e) (open!)))))))))
+
+(defn- heading-slug
+  "GitHub-style anchor for a heading's text: lower case, punctuation dropped,
+  spaces to dashes."
+  [text]
+  (-> (str/lower-case (str/trim text))
+      (str/replace #"[^a-z0-9 _-]" "")
+      (str/replace #"\s" "-")))
+
+(defn- scroll-to-anchor!
+  "Click handler: an in-page `#anchor` link scrolls to the heading with that
+  slug instead of changing the route."
+  [e]
+  (when-let [a (some-> (.-target e) (.closest "a[href^='#']"))]
+    (let [anchor (subs (.getAttribute a "href") 1)]
+      (when-not (str/starts-with? anchor "/")
+        (.preventDefault e)
+        (when-let [h (->> (array-seq (.querySelectorAll js/document "h1,h2,h3,h4,h5,h6"))
+                          (filter #(= anchor (heading-slug (.-textContent %))))
+                          first)]
+          (.scrollIntoView h))))))
+
+(defonce ^:private anchor-listener
+  (.addEventListener js/document "click" scroll-to-anchor!))
 
 (defn html-panel
   "Render server HTML and wire long-running Rerun buttons + iframe sizing."
@@ -661,7 +688,9 @@
              [:a {:href "#/"} "Tree"]
              " / "
              [:span name]]
-            [:h1 name]]
+            [:h1 name]
+            (when (:builtin page)
+              [:p.muted "Built-in page. Saving an edit keeps your own copy in this repo."])]
            [:div.btn-row
             [:button.btn-ghost {:on-click #(js/history.back)} "Back"]]]
           [markdown-editor {:title "Page"

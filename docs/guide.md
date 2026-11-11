@@ -52,8 +52,14 @@ If two fences of the same plugin should keep separate results, give each an
 ````
 
 Sunlit Clearing creates a few starter pages the first time it opens a repo:
-**Architecture**, **Testing**, **Lint** and **Python tools**. They're ordinary
+**Architecture**, **Testing**, **Lint** and **Python tools**, and puts an
+[overview](#is-everything-up-to-date) on the front page. They're ordinary
 pages, so edit them freely.
+
+Every repo also has two built-in pages: this **Guide** (the Guide link in the
+top bar) and **Writing plugins**. If you edit and save one, your copy is kept
+in the repo and shown from then on; delete it from `.sunlit/pages/` to get
+the built-in version back.
 
 ---
 
@@ -235,6 +241,66 @@ with the same cached / Rerun behaviour:
 
 Add `:report "path/to/report.html"` to embed an HTML file the command
 produces.
+
+### Is everything up to date?
+
+The `overview` plugin answers "when did we last run the tests, coverage and
+linters, did they pass, and has the code changed since?" It's on the front
+page of new repos; put it on any page:
+
+````markdown
+```plugin overview
+{}
+```
+````
+
+With `{}` it lists everything that has been run, with its result and how long
+ago. To check that results are current, list the checks you care about and
+the files each one covers:
+
+````markdown
+```plugin overview
+{:title "Health"
+ :checks [{:label "Python tests"    :plugin "unittests" :id "python" :compare "src/**/*.py"}
+          {:label "Python coverage" :plugin "pycov"                  :compare "src/**/*.py"}
+          {:label "Clojure lint"    :plugin "mystyle-clj"            :compare ["src/**/*.clj" "test/**"]}
+          {:label "Deployed"        :match "deployed to prod"        :compare "src/**"}]}
+```
+````
+
+Each row shows one of:
+
+| State | Meaning |
+|-------|---------|
+| ✓ up to date | the last run passed, and no matching file has changed since |
+| ⚠ code changed since | a file under `:compare` was modified after the last run (the row names it) |
+| ✗ last run failed | the last run failed (the row says when it last passed) |
+| – never run | nothing in the log matches |
+
+A check picks out runs by `:plugin`, by `:id` (the fence's `:id`, or the
+plugin's default such as `"python"` for Python tests), and by `:match`, a
+regular expression tested against the run's message. Use any combination.
+`:compare` takes one file pattern or a list; leave it out to skip the
+comparison.
+
+**How it works.** Whenever a background run finishes, Sunlit Clearing adds a
+line to `.sunlit/cache/runs.jsonl`:
+
+```json
+{"at":"2026-11-11T12:59:17Z","plugin":"mystyle-clj","id":"clojure","status":"ok","msg":"mystyle-clj/clojure ok","summary":{"hard":0,"warn":225}}
+```
+
+The overview only reads this log; it doesn't know about the plugins that
+wrote it. So anything else can add to it too: a deploy script, a git hook,
+or an agent. Only `at` (a UTC timestamp) and `msg` are needed:
+
+```bash
+echo "{\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"msg\":\"deployed to prod\"}" >> .sunlit/cache/runs.jsonl
+```
+
+A line without a `status` counts as a success. File changes are judged by
+modification time, so switching git branches can mark checks as changed
+even when the content is the same; rerun them and they're current again.
 
 ---
 

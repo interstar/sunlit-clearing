@@ -15,7 +15,7 @@ Interpret its sections as follows:
 
 - `:title` names the standard.
 - `:directories` and `:files` enumerate expected paths. `:required true` means missing is a convention failure; `false` is optional. Descriptions explain the intended use.
-- `:formats` defines document conventions. For each format, inspect `:match`, filename regex, and field requirements, including `:enum`, `:multiple`, and `:pattern`. For the current `issue` format, this means markdown files matching `issues/*.md`, named `NNNN-short-slug.md`, with YAML front matter fields `id`, `title`, `status`, `labels`, and `created`; status is `open` or `closed`, and dates follow `YYYY-MM-DD`. `closed` and `git-bug` are optional.
+- `:formats` defines document conventions. For each format, inspect `:match`, filename regex, and field requirements, including `:enum`, `:multiple`, and `:pattern`. For the current `issue` format, this means markdown files matching `issues/*.md`, named `NNNN-short-slug.md`, with YAML front matter fields `id`, `title`, `status`, `labels`, and `created`; status is `open` or `closed`, and dates follow `YYYY-MM-DD`. `closed` is optional.
 
 Do not hard-code the current template as permanent truth: reread the file each time and derive the expected layout and formats from its current contents. A project may have `.sunlit/template.edn` as an emergency override; if present, note it and compare it with the global standard. The global template comments say to prefer the shared standard.
 

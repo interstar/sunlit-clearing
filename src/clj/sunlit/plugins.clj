@@ -11,6 +11,7 @@
             [sunlit.plugins.malli :as malli]
             [sunlit.plugins.matrix :as matrix]
             [sunlit.plugins.mystyle-clj :as mystyle-clj]
+            [sunlit.plugins.overview :as overview]
             [sunlit.plugins.mystyle-py :as mystyle-py]
             [sunlit.plugins.mystyle-js :as mystyle-js]
             [sunlit.plugins.mystyle-cpp :as mystyle-cpp]
@@ -52,6 +53,7 @@
    malli/plugin
    instaparse/plugin
    matrix/plugin
+   overview/plugin
    projectlint/plugin])
 
 (defn- normalize

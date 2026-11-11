@@ -25,8 +25,33 @@
 (defn- page-file [name]
   (io/file (pages-root) (str (sanitize-name name) ".md")))
 
-(defn exists? [name]
+(defn exists?
+  "Whether the repo has its own copy of the page."
+  [name]
   (.isFile (page-file name)))
+
+(def builtin-docs
+  "Pages every repo has, served from docs/ (on the classpath) until the repo
+  saves its own copy under .sunlit/pages/."
+  {"Guide" "guide.md"
+   "Writing plugins" "writing_plugins.md"})
+
+(def ^:private doc-links
+  {"guide.md" "#/page/Guide"
+   "writing_plugins.md" "#/page/Writing%20plugins"})
+
+(defn- app-links
+  "docs/ Markdown with links between the guides pointed at their pages; other
+  relative .md links (outside the watched repo) become plain text."
+  [markdown]
+  (str/replace markdown #"\[([^\]]+)\]\(([^)#\s]+\.md)(#[^)\s]*)?\)"
+               (fn [[whole text target _]]
+                 (if-let [page (doc-links target)]
+                   (str "[" text "](" page ")")
+                   (if (re-find #"^[a-z]+:" target) whole text)))))
+
+(defn- builtin-markdown [n]
+  (some-> (builtin-docs n) io/resource slurp app-links))
 
 (defn read-page [name]
   (let [n (sanitize-name name)
@@ -35,9 +60,14 @@
       {:name n
        :exists true
        :markdown (slurp f)}
-      {:name n
-       :exists false
-       :markdown ""})))
+      (if-let [md (builtin-markdown n)]
+        {:name n
+         :exists true
+         :builtin true
+         :markdown md}
+        {:name n
+         :exists false
+         :markdown ""}))))
 
 (defn write-page! [name markdown]
   (let [n (sanitize-name name)
@@ -57,18 +87,23 @@
 (defn list-pages []
   (let [dir (pages-root)]
     (if-not (.isDirectory dir)
-      []
+      (vec (sort (keys builtin-docs)))
       (->> (.listFiles dir)
            (filter #(and (.isFile %) (str/ends-with? (.getName %) ".md")))
            (map #(-> (.getName %) (str/replace #"\.md$" "")))
            (remove #(= % index-page-name))
+           (concat (keys builtin-docs))
+           distinct
            sort
            vec))))
 
 (def ^:private index-seed
   (str "# Welcome\n\n"
        "Notes for this repository tree.\n\n"
-       "Custom links: [[README|README.md]] · [[Architecture]] · [[Testing]] · [[Python tools]]\n"))
+       "Custom links: [[README|README.md]] · [[Architecture]] · [[Testing]] · [[Python tools]] · [[Guide]]\n\n"
+       "```plugin overview\n"
+       "{}\n"
+       "```\n"))
 
 (def ^:private architecture-seed
   (str "# Architecture\n\n"

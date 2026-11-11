@@ -5,6 +5,7 @@
             [clojure.java.shell :as sh]
             [clojure.string :as str]
             [sunlit.repo :as repo]
+            [sunlit.runlog :as runlog]
             [hiccup.core :as hiccup])
   (:import [java.time Instant]
            [java.util.concurrent Executors]))
@@ -40,13 +41,19 @@
           {:status "error" :error "Corrupt cache file"}))
       {:status "never" :plugin (name plugin) :id (safe-id id)})))
 
-(defn write-cache! [plugin id data]
+(def ^:private finished-statuses #{"ok" "failed" "error"})
+
+(defn write-cache!
+  "Write a job's cache payload; a finished run is also added to the run log."
+  [plugin id data]
   (let [f (result-file plugin id)
         payload (merge {:plugin (name plugin)
                         :id (safe-id id)}
                        data)]
     (io/make-parents f)
     (spit f (json/generate-string payload))
+    (when (finished-statuses (:status payload))
+      (runlog/append! (runlog/job-entry payload)))
     payload))
 
 (defn running? [plugin id]

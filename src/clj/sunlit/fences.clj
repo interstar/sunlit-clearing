@@ -152,15 +152,8 @@
 (defn nth-fence
   "{:name :body :start :end} for fence `index` (body span), or nil."
   [markdown index]
-  (let [m (re-matcher render/plugin-fence-re (or markdown ""))]
-    (loop [i 0]
-      (when (.find m)
-        (if (= i index)
-          {:name (.group m 1)
-           :body (.group m 2)
-           :start (.start m 2)
-           :end (.end m 2)}
-          (recur (inc i)))))))
+  (when-let [{:keys [name body body-start body-end]} (get (render/live-fences markdown) index)]
+    {:name name :body body :start body-start :end body-end}))
 
 (defn replace-fence-body
   "Replace the EDN body of fence `index` so it reads as `params`, keeping

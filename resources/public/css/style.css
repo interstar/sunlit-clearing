@@ -1560,3 +1560,11 @@ table.matrix .matrix-corner { color: var(--muted); font-weight: 400; font-style:
 .matrix-links { display: inline-flex; flex-direction: column; gap: 0.1rem; }
 .matrix-more { font-size: 0.75rem; color: var(--muted); }
 .matrix-check { margin: 0 0.3rem 0 0; vertical-align: middle; cursor: pointer; }
+
+/* overview plugin */
+.overview-table { width: 100%; border-collapse: collapse; }
+.overview-table th, .overview-table td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--line); }
+.overview-ok .overview-state { color: #2e7d32; }
+.overview-stale .overview-state { color: #b26a00; font-weight: 600; }
+.overview-failed .overview-state { color: #c62828; font-weight: 600; }
+.overview-never .overview-state { color: #888; }
