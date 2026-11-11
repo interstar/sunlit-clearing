@@ -118,6 +118,24 @@
        "{}\n"
        "```\n"))
 
+(defn- lint-fence [plugin]
+  (str "```plugin " plugin "\n{:exclude []}\n```\n\n"))
+
+(def ^:private lint-seed
+  (str "# Lint\n\n"
+       "Structural style findings from the mystyle linters. Each panel opens "
+       "and closes; Rerun refreshes its cached result. Delete the fences for "
+       "languages this repo doesn't use.\n\n"
+       "`:exclude` lists directories to skip, on top of each linter's built-in "
+       "list (VCS, build output, dependencies…). A bare name (`\".cache\"`) is "
+       "skipped at any depth; a path (`\"panel-editor/.cache\"`) is relative to "
+       "the repo root. Edit, save, then Rerun.\n\n"
+       "## Clojure\n\n" (lint-fence "mystyle-clj")
+       "## Python\n\n" (lint-fence "mystyle-py")
+       "## JavaScript / TypeScript\n\n" (lint-fence "mystyle-js")
+       "## C++\n\n" (lint-fence "mystyle-cpp")
+       "## Haxe\n\n" (lint-fence "mystyle-hx")))
+
 (def ^:private python-tools-seed
   (str "# Python tools\n\n"
        "Sunlit Clearing can keep a private virtualenv under "
@@ -135,6 +153,8 @@
     (write-page! "Architecture" architecture-seed))
   (when-not (exists? "Testing")
     (write-page! "Testing" testing-seed))
+  (when-not (exists? "Lint")
+    (write-page! "Lint" lint-seed))
   (when-not (exists? "Python tools")
     (write-page! "Python tools" python-tools-seed)))
 

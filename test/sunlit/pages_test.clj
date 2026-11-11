@@ -39,7 +39,11 @@
         (let [md (:markdown (pages/read-page "Architecture"))]
           (is (str/includes? md "```plugin structure"))
           (is (str/includes? md "```plugin malli"))
-          (is (str/includes? md "```plugin instaparse")))))))
+          (is (str/includes? md "```plugin instaparse"))))
+      (testing "lint page has one editable fence per linter"
+        (let [md (:markdown (pages/read-page "Lint"))]
+          (doseq [p ["mystyle-clj" "mystyle-py" "mystyle-js" "mystyle-cpp" "mystyle-hx"]]
+            (is (str/includes? md (str "```plugin " p "\n{:exclude []}\n```")))))))))
 
 (deftest rejects-path-traversal
   (is (thrown? Exception (pages/sanitize-name "../etc"))))

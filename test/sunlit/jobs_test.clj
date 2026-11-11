@@ -27,3 +27,16 @@
           (is (= "ok" (:status result)))
           (is (zero? (:exit result)))
           (is (re-find #"hello-sunlit" (str (:stdout cached)))))))))
+
+(deftest collapsible-panels-fold-command-and-body
+  (with-temp-repo
+    (fn [_]
+      (let [open (:html (jobs/render-panel {:plugin "run" :id "a" :title "A"}))
+            folded (:html (jobs/render-panel {:plugin "run" :id "a" :title "A"
+                                              :summary-html "<b>3</b>"
+                                              :collapsible? true}))]
+        (is (not (re-find #"lr-collapsible|js-lr-toggle" open)))
+        (is (re-find #"class=\"lr-panel lr-collapsible\"" folded))
+        (is (re-find #"js-lr-toggle" folded))
+        (testing "summary stays outside the folding part"
+          (is (re-find #"lr-summary\"><b>3</b></div><div class=\"lr-collapse\"" folded)))))))

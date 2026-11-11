@@ -17,7 +17,9 @@
      "Architecture"]
     [:a {:href "#/conventions" :class (when (= :conventions (:page route)) "active")} "Conventions"]
     [:a {:href "#/testing" :class (when (= :testing (:page route)) "active")} "Testing"]
-    [:a {:href "#/lint" :class (when (= :lint (:page route)) "active")} "Lint"]
+    [:a {:href "#/page/Lint"
+         :class (when (and (= :wiki (:page route)) (= "Lint" (:name route))) "active")}
+     "Lint"]
     [:a {:href "#/sessions" :class (when (#{:sessions :session} (:page route)) "active")} "Sessions"]
     [:a {:href "#/agents" :class (when (= :agents (:page route)) "active")} "Agents"]
     [:a {:href "#/plugins" :class (when (= :plugins (:page route)) "active")} "Plugins"]]
@@ -71,6 +73,38 @@
                        (js/alert (str "Rerun failed: " err))
                        (set! (.-disabled btn) false)
                        (set! (.-textContent btn) "Rerun")))))))))))
+
+(defn- panel-open-key [panel]
+  (str "sunlit.lr-open:" (.-hash js/location) ":" (.getAttribute panel "data-plugin")
+       "/" (.getAttribute panel "data-cache-id")))
+
+(defn- stored-open? [k]
+  (try (= "1" (.getItem js/localStorage k)) (catch :default _ false)))
+
+(defn- store-open! [k open?]
+  (try (if open? (.setItem js/localStorage k "1") (.removeItem js/localStorage k))
+       (catch :default _ nil)))
+
+(defn- set-panel-open! [panel open?]
+  (.toggle (.-classList panel) "lr-open" open?)
+  (when-let [btn (.querySelector panel ".js-lr-toggle")]
+    (.setAttribute btn "aria-expanded" (str open?))))
+
+(defn- toggle-panel! [panel e]
+  (.preventDefault e)
+  (let [open? (not (.contains (.-classList panel) "lr-open"))]
+    (store-open! (panel-open-key panel) open?)
+    (set-panel-open! panel open?)))
+
+(defn- bind-collapsibles!
+  "Open/close collapsible long-running panels (closed unless the viewer left
+  them open; remembered per page and panel in localStorage)."
+  [root-el]
+  (when root-el
+    (doseq [panel (array-seq (.querySelectorAll root-el ".lr-collapsible"))]
+      (set-panel-open! panel (stored-open? (panel-open-key panel)))
+      (doseq [el (array-seq (.querySelectorAll panel ".js-lr-toggle, .lr-meta strong"))]
+        (set! (.-onclick el) (partial toggle-panel! panel))))))
 
 (defn- resize-iframe! [iframe]
   (try
@@ -262,6 +296,7 @@
      {:component-did-mount
       (fn [_]
         (bind-rerun-buttons! @el on-rerun)
+        (bind-collapsibles! @el)
         (bind-matrix! @el on-rerun)
         (bind-iframes! @el)
         (bind-mermaid! @el)
@@ -270,6 +305,7 @@
       (fn [this]
         (let [{:keys [on-rerun]} (second (r/argv this))]
           (bind-rerun-buttons! @el on-rerun)
+          (bind-collapsibles! @el)
           (bind-matrix! @el on-rerun))
         (bind-iframes! @el)
         (bind-mermaid! @el)
@@ -665,27 +701,6 @@
 
        (false? (:ok data))
        [:p.error (or (:error data) "Could not run tests")]
-
-       :else
-       [:<>
-        (for [panel (:panels data)]
-          ^{:key (:plugin panel)}
-          [html-panel {:html (:html panel) :on-rerun reload!}])])]))
-
-(defn lint-page [st reload!]
-  (let [data (:lint st)]
-    [:section.page.lint-page
-     [:div.page-head
-      [:div
-       [:h1 "Lint"]
-       [:p.muted "mystyle-clj · mystyle-py · mystyle-js · mystyle-cpp · mystyle-hx"]]
-      [:button.btn {:on-click reload!} "Refresh"]]
-     (cond
-       (or (nil? data) (:loading data))
-       [:p.muted "Loading linter results…"]
-
-       (false? (:ok data))
-       [:p.error (or (:error data) "Could not load linters")]
 
        :else
        [:<>

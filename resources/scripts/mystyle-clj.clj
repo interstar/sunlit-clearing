@@ -9,7 +9,8 @@
    [clojure.tools.reader.reader-types :as rt]))
 
 (defn- usage []
-  (println "Usage: bb mystyle_lint.clj path/to/src"))
+  (println "Usage: bb mystyle-clj.clj path/to/src [--exclude DIR]...")
+  (println "  --exclude DIR  skip DIR: a bare name at any depth, or a path relative to path/to/src"))
 
 (defn- normalize-text [s]
   (str/replace s "\r\n" "\n"))
@@ -344,23 +345,51 @@
     ".cpcache" ".clj-kondo" ".lsp" ".idea" ".sunlit" "resources"
     "out" "compiled" "vendor" "dist" "build" "coverage"})
 
-(defn- skip-dir? [^java.io.File f]
-  (and (.isDirectory f) (contains? skip-dir-names (.getName f))))
+(defn- normalize-exclude
+  "\"./apps/x/.cache/\" -> \"apps/x/.cache\"; nil for blank entries."
+  [s]
+  (let [e (-> (str s) str/trim (str/replace #"^\./" "") (str/replace #"^/+|/+$" ""))]
+    (when-not (contains? #{"" "."} e) e)))
+
+(defn- excluded?
+  "Whether directory `rel` (relative to the target root) matches an
+  --exclude: a bare name matches at any depth, a path matches from the root."
+  [excludes rel]
+  (let [name (last (str/split rel #"/"))]
+    (some (fn [e]
+            (if (str/includes? e "/")
+              (or (= rel e) (str/starts-with? rel (str e "/")))
+              (= name e)))
+          excludes)))
+
+(defn- skip-dir? [^java.io.File root excludes ^java.io.File f]
+  (or (contains? skip-dir-names (.getName f))
+      (excluded? excludes (str (.relativize (.toPath root) (.toPath f))))))
 
 (defn- source-files-under
   "Clojure source files below `dir`, not descending into skipped directories."
-  [^java.io.File dir]
+  [root excludes ^java.io.File dir]
   (mapcat (fn [^java.io.File f]
             (cond
-              (.isDirectory f) (if (skip-dir? f) [] (source-files-under f))
+              (.isDirectory f) (if (skip-dir? root excludes f) [] (source-files-under root excludes f))
               (clj-source-file? f) [f]
               :else []))
           (.listFiles dir)))
 
-(defn- collect-files [root]
+(defn- collect-files [root excludes]
   (let [dir (io/file root)]
     (when (.isDirectory dir)
-      (source-files-under dir))))
+      (source-files-under dir excludes dir))))
+
+(defn- parse-cli
+  "{:root path :excludes [dir ...]} from `path [--exclude DIR]...`."
+  [args]
+  (loop [[a & more] args
+         opts {:root nil :excludes []}]
+    (cond
+      (nil? a) opts
+      (= a "--exclude") (recur (rest more) (update opts :excludes conj (first more)))
+      :else (recur more (assoc opts :root a)))))
 
 (defn- format-warning [{:keys [file line col level message]}]
   (format "%s:%d:%d [%s] %s" file line col level message))
@@ -475,10 +504,10 @@
                        sim (:file b) (:line b) (:col b))))))
 
 (defn -main [& args]
-  (let [root (first args)]
+  (let [{:keys [root excludes]} (parse-cli args)]
     (if-not root
       (usage)
-      (let [files (collect-files root)
+      (let [files (collect-files root (keep normalize-exclude excludes))
             per-file (map #(file-warnings (.getPath ^java.io.File %)) files)
             warnings (mapcat :warnings per-file)
             forms (mapcat :forms per-file)

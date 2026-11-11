@@ -86,6 +86,30 @@
       (is (fn? (:run p)))
       (is (fn? (:start! p))))))
 
+(deftest exclude-args-from-fence-params
+  (is (= [] (mystyle/exclude-args nil)))
+  (is (= ["--exclude" ".cache"] (mystyle/exclude-args ".cache")))
+  (is (= ["--exclude" ".cache" "--exclude" "apps/x/gen"]
+         (mystyle/exclude-args [".cache" "" "apps/x/gen"]))))
+
+(deftest fence-excludes-reach-every-linter
+  (with-temp-repo
+    (fn [dir]
+      (doseq [[sub file text] [["keep" "a.clj" "(ns a)\n(def state (atom 0))\n"]
+                               ["skip/.cache" "b.clj" "(ns b)\n(def state (atom 0))\n"]
+                               ["keep" "a.cpp" "static int counter = 0;\n"]
+                               ["skip/.cache" "b.cpp" "static int counter = 0;\n"]
+                               ["keep" "A.hx" "class A {\n\tstatic var counter = 0;\n}\n"]
+                               ["skip/.cache" "B.hx" "class B {\n\tstatic var counter = 0;\n}\n"]]]
+        (io/make-parents (io/file dir sub file))
+        (spit (io/file dir sub file) text))
+      (doseq [k [:mystyle-clj :mystyle-cpp :mystyle-hx]
+              exclude [".cache" ["skip/.cache"]]]
+        (let [files (set (map :file (get-in (mystyle/compute! k {:exclude exclude})
+                                            [:data :findings])))]
+          (is (some #(str/starts-with? % "keep/") files) (str k))
+          (is (not-any? #(str/starts-with? % "skip/") files) (str k " " exclude)))))))
+
 (deftest mystyle-cpp-runs-the-vendored-script
   (with-temp-repo
     (fn [dir]

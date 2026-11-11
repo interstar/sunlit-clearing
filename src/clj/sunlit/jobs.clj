@@ -182,9 +182,13 @@
            (str/replace #"^/+" "")
            (str/replace #"\\" "/"))))
 
-(defn- render-toolbar [plugin id title status cache]
+(defn- render-toolbar [plugin id title status cache collapsible?]
   [:div.lr-toolbar
    [:div.lr-meta
+    (when collapsible?
+      [:button.lr-toggle.js-lr-toggle {:type "button" :title "Show/hide details"
+                                       :aria-expanded "false"}
+       [:span.lr-chevron "▸"]])
     [:strong (or title (str plugin "/" (safe-id id)))]
     [:span.lr-status {:class status} status]
     (when (:finished_at cache)
@@ -251,42 +255,47 @@
           (string? c) c
           :else "")))
 
+(def ^:private html-marker "SUNLIT_LR_HTML_SLOT")
+(def ^:private summary-marker "SUNLIT_LR_SUMMARY_SLOT")
+
+(defn- panel-skeleton
+  "Panel hiccup with marker strings where the rich and summary HTML go."
+  [{:keys [plugin id title params collapsible? cache status summary-html] :as body}]
+  (let [cmd-str (cmd-string cache)]
+    [:div
+     {:class (str "lr-panel" (when collapsible? " lr-collapsible"))
+      :data-plugin (name plugin)
+      :data-cache-id (safe-id id)
+      :data-params (json/generate-string (or params {}))}
+     (render-toolbar plugin id title status cache collapsible?)
+     (when-not (str/blank? summary-html)
+       [:div.lr-summary summary-marker])
+     [:div.lr-collapse
+      (when-not (str/blank? cmd-str)
+        [:p.lr-cmd [:code cmd-str]])
+      (render-body (assoc body :html-marker html-marker))]]))
+
 (defn render-panel
   "HTML panel for a cached long-running result, including rerun affordance.
   Optional :iframe is a repo-relative HTML path to embed when the file exists.
   Optional :summary-html is unescaped HTML shown after the command, before logs.
   If the cache (or :body-html option) contains an :html string, it is spliced
-  in unescaped so plugins can ship rich deterministic panels."
-  [{:keys [plugin id title params iframe body-html summary-html]}]
+  in unescaped so plugins can ship rich deterministic panels.
+  With :collapsible? the command and body fold away under a toggle (closed by
+  default; the client remembers each panel's state), leaving the toolbar and
+  summary visible."
+  [{:keys [plugin id title params iframe body-html summary-html collapsible?]}]
   (let [cache (current-cache plugin id)
         status (:status cache "never")
         report (or iframe (:iframe params) (:report params))
         show-iframe? (and report (not= status "running") (report-exists? report))
         rich-html (or body-html (:html cache) "")
         summary-html (or summary-html "")
-        params-json (json/generate-string (or params {}))
-        cmd-str (cmd-string cache)
-        html-marker "SUNLIT_LR_HTML_SLOT"
-        summary-marker "SUNLIT_LR_SUMMARY_SLOT"
-        skeleton
-        (hiccup/html
-         [:div.lr-panel
-          {:data-plugin (name plugin)
-           :data-cache-id (safe-id id)
-           :data-params params-json}
-          (render-toolbar plugin id title status cache)
-          (when-not (str/blank? cmd-str)
-            [:p.lr-cmd [:code cmd-str]])
-          (when-not (str/blank? summary-html)
-            [:div.lr-summary summary-marker])
-          (render-body {:status status
-                        :show-iframe? show-iframe?
-                        :report report
-                        :title title
-                        :rich-html rich-html
-                        :summary-html summary-html
-                        :html-marker html-marker
-                        :cache cache})])]
+        skeleton (hiccup/html
+                  (panel-skeleton {:plugin plugin :id id :title title :params params
+                                   :collapsible? collapsible? :cache cache :status status
+                                   :show-iframe? show-iframe? :report report
+                                   :rich-html rich-html :summary-html summary-html}))]
     {:html (-> skeleton
                (cond-> (not (str/blank? rich-html))
                  (str/replace html-marker rich-html))

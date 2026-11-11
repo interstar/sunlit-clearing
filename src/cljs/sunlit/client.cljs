@@ -20,7 +20,6 @@
            :plugins nil
            :conventions nil
            :testing nil
-           :lint nil
            :sessions nil
            :session nil
            :status nil
@@ -67,7 +66,7 @@
       {:page :testing}
 
       (= h "/lint")
-      {:page :lint}
+      {:page :wiki :name "Lint"}
 
       (= h "/sessions")
       {:page :sessions}
@@ -182,9 +181,6 @@
 (defn- load-testing! []
   (load-plugin-panels! :testing ["unittests" "projectlint"]))
 
-(defn- load-lint! []
-  (load-plugin-panels! :lint ["mystyle-clj" "mystyle-py" "mystyle-js" "mystyle-cpp" "mystyle-hx"]))
-
 (defn- load-sessions! []
   (api/get-json "/api/sessions"
                 (fn [data] (swap! app-state assoc :sessions data))
@@ -239,7 +235,6 @@
       :plugins (load-plugins!)
       :conventions (load-conventions!)
       :testing (load-testing!)
-      :lint (load-lint!)
       :sessions (load-sessions-busy!)
       :session (load-session! (:id route))
       :agents (load-agents!)
@@ -310,7 +305,6 @@
         :plugins [views/plugins-page st load-plugins!]
         :conventions [views/conventions-page st load-conventions!]
         :testing [views/testing-page st load-testing!]
-        :lint [views/lint-page st load-lint!]
         :sessions [views/sessions-page st navigate! load-sessions! refresh-sessions!]
         :session [views/session-page st navigate!]
         :agents [views/agents-page st load-agents!]

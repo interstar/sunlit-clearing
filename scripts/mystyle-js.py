@@ -98,6 +98,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Comma-separated file extensions to lint (default: .js,.jsx,.mjs,.cjs,.ts,.tsx,.mts,.cts)",
     )
+    parser.add_argument("--exclude", action="append", default=[], metavar="DIR", help=EXCLUDE_HELP)
     return parser.parse_args()
 
 
@@ -132,13 +133,29 @@ def is_ts_extension(ext: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def iter_files(target: Path, extensions: tuple[str, ...]) -> Iterable[Path]:
+EXCLUDE_HELP = ("Directory to skip (repeatable). A bare name (`.cache`) is skipped at any depth; "
+                "a path (`apps/x/.cache`) is relative to the target directory.")
+
+
+def normalize_excludes(raw: Iterable[str]) -> tuple[str, ...]:
+    return tuple(e.strip().removeprefix("./").strip("/") for e in raw if e.strip().strip("/."))
+
+
+def is_excluded(rel: str, excludes: tuple[str, ...]) -> bool:
+    """Whether directory `rel` (posix, relative to the target) matches an --exclude."""
+    name = rel.rsplit("/", 1)[-1]
+    return any(name == e if "/" not in e else rel == e or rel.startswith(e + "/") for e in excludes)
+
+
+def iter_files(target: Path, extensions: tuple[str, ...], excludes: tuple[str, ...] = ()) -> Iterable[Path]:
     if target.is_file() and any(target.name.endswith(e) for e in extensions):
         yield target
         return
 
     for root, dirs, files in os.walk(target):
-        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+        here = Path(root).relative_to(target).as_posix()
+        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS
+                   and not is_excluded(d if here == "." else f"{here}/{d}", excludes)]
         for name in files:
             if any(name.endswith(e) for e in extensions):
                 yield Path(root) / name
@@ -1170,11 +1187,12 @@ def _has_type_annotation(param: Node) -> bool:
 def lint_path(
     target: Path,
     extensions: tuple[str, ...],
+    excludes: tuple[str, ...] = (),
 ) -> list[Finding]:
     findings: list[Finding] = []
     function_infos: list[FunctionInfo] = []
 
-    for path in sorted(iter_files(target, extensions)):
+    for path in sorted(iter_files(target, extensions, excludes)):
         try:
             source = path.read_bytes()
         except OSError:
@@ -1294,7 +1312,7 @@ def main() -> int:
     else:
         extensions = ALL_EXTENSIONS
 
-    findings = lint_path(target, extensions)
+    findings = lint_path(target, extensions, normalize_excludes(args.exclude))
     for finding in findings:
         print(finding.render())
     return 0

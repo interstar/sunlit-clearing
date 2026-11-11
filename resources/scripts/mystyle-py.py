@@ -98,7 +98,23 @@ def parse_args() -> argparse.Namespace:
         default=".py",
         help="Comma-separated file extensions to lint (for example: .py,.py.j2)",
     )
+    parser.add_argument("--exclude", action="append", default=[], metavar="DIR",
+                        help=EXCLUDE_HELP)
     return parser.parse_args()
+
+
+EXCLUDE_HELP = ("Directory to skip (repeatable). A bare name (`.cache`) is skipped at any depth; "
+                "a path (`apps/x/.cache`) is relative to the target directory.")
+
+
+def normalize_excludes(raw: Iterable[str]) -> tuple[str, ...]:
+    return tuple(e.strip().removeprefix("./").strip("/") for e in raw if e.strip().strip("/."))
+
+
+def is_excluded(rel: str, excludes: tuple[str, ...]) -> bool:
+    """Whether directory `rel` (posix, relative to the target) matches an --exclude."""
+    name = rel.rsplit("/", 1)[-1]
+    return any(name == e if "/" not in e else rel == e or rel.startswith(e + "/") for e in excludes)
 
 
 def normalize_extensions(raw: str) -> tuple[str, ...]:
@@ -113,13 +129,15 @@ def normalize_extensions(raw: str) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def iter_python_files(target: Path, extensions: tuple[str, ...]) -> Iterable[Path]:
+def iter_python_files(target: Path, extensions: tuple[str, ...], excludes: tuple[str, ...] = ()) -> Iterable[Path]:
     if target.is_file() and any(target.name.endswith(ext) for ext in extensions):
         yield target
         return
 
     for root, dirs, files in os.walk(target):
-        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+        here = Path(root).relative_to(target).as_posix()
+        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS
+                   and not is_excluded(d if here == "." else f"{here}/{d}", excludes)]
         for name in files:
             if any(name.endswith(ext) for ext in extensions):
                 yield Path(root) / name
@@ -603,11 +621,11 @@ def file_too_long(path: Path, text: str) -> list[Finding]:
     return []
 
 
-def lint_path(target: Path, extensions: tuple[str, ...]) -> list[Finding]:
+def lint_path(target: Path, extensions: tuple[str, ...], excludes: tuple[str, ...] = ()) -> list[Finding]:
     findings: list[Finding] = []
     function_infos: list[FunctionInfo] = []
 
-    for path in sorted(iter_python_files(target, extensions)):
+    for path in sorted(iter_python_files(target, extensions, excludes)):
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -677,7 +695,7 @@ def main() -> int:
         return 2
 
     extensions = normalize_extensions(args.extensions)
-    findings = lint_path(target, extensions)
+    findings = lint_path(target, extensions, normalize_excludes(args.exclude))
     for finding in findings:
         print(finding.render())
     return 0

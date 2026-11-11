@@ -124,6 +124,14 @@ Long-running builtins:
 | `mystyle-cpp` | `python3 scripts/mystyle-cpp.py <repo>` (needs tree-sitter) | findings panel |
 | `mystyle-hx` | `scripts/mystyle-haxe <repo>` (native binary) | findings panel |
 
+The **Lint** tab is an editable wiki page (seeded once as `Lint`) with one
+`plugin mystyle-*` fence per linter; delete the ones a repo doesn't need.
+Each fence's `{:exclude [...]}` becomes `--exclude DIR` arguments: a bare
+name (`".cache"`) skips that directory at any depth, a path
+(`"panel-editor/.cache"`) skips it relative to the repo root. Linter panels
+are collapsible: the toolbar and counts stay visible, and each panel's
+open/closed state is remembered in the browser.
+
 Python analysis tools (pytest, coverage, and the tree-sitter grammars for the
 mystyle linters) live in `.sunlit/venv`, created on the first Python
 test/coverage/lint run. A venv missing any of them is topped up on its next

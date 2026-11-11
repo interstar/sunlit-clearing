@@ -551,6 +551,23 @@ pre code.wchnt-coloured {
   margin: 0.55rem 0.75rem 0;
 }
 
+/* Collapsible long-running panels: toolbar + summary stay, the rest folds. */
+.lr-toggle {
+  border: 0;
+  background: none;
+  padding: 0 0.15rem;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.lr-chevron { display: inline-block; transition: transform 0.12s ease; }
+.lr-collapsible.lr-open .lr-chevron { transform: rotate(90deg); }
+.lr-collapsible .lr-meta strong { cursor: pointer; }
+.lr-collapsible:not(.lr-open) .lr-collapse { display: none; }
+.lr-collapsible:not(.lr-open) .lr-summary { margin-bottom: 0.55rem; }
+.lr-collapsible:not(.lr-open):not(:has(.lr-summary)) .lr-toolbar { border-bottom: 0; }
+
 .test-summary {
   display: flex;
   flex-wrap: wrap;

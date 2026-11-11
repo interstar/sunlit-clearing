@@ -103,15 +103,29 @@
   (or (when (native-platform?) (script-path program))
       (when (executable-on-path? program) program)))
 
-(defn- resolve-cmd [linter]
-  (let [root (str (repo/repo-root))]
-    (if (= :binary (:kind linter))
-      (some-> (binary-path (:script linter)) (vector root))
-      (when-let [sp (script-path (:script linter))]
-        (case (:kind linter)
-          :bb (when (executable-on-path? "bb") ["bb" sp root])
-          :python [(python-bin) sp root]
-          nil)))))
+(defn- base-cmd [linter root]
+  (if (= :binary (:kind linter))
+    (some-> (binary-path (:script linter)) (vector root))
+    (when-let [sp (script-path (:script linter))]
+      (case (:kind linter)
+        :bb (when (executable-on-path? "bb") ["bb" sp root])
+        :python [(python-bin) sp root]
+        nil))))
+
+(defn exclude-args
+  "`--exclude DIR` pairs for the fence's :exclude, a string or a list of
+  strings: a bare directory name skips it at any depth, a path skips it
+  relative to the repo root."
+  [exclude]
+  (let [dirs (if (string? exclude) [exclude] exclude)]
+    (vec (mapcat (fn [d] ["--exclude" (str d)])
+                 (remove (comp str/blank? str) dirs)))))
+
+(defn- resolve-cmd
+  ([linter] (resolve-cmd linter nil))
+  ([linter exclude]
+   (some-> (base-cmd linter (str (repo/repo-root)))
+           (into (exclude-args exclude)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Output parsing
@@ -302,10 +316,11 @@
       (findings-payload linter cmd exit out err findings))))
 
 (defn compute!
-  "Run one linter and return a jobs cache payload."
-  [linter-key]
+  "Run one linter and return a jobs cache payload. `params` are the plugin
+  fence's; its :exclude lists directories to skip."
+  [linter-key & [params]]
   (let [{:keys [title] :as linter} (get linters linter-key)
-        cmd (resolve-cmd linter)]
+        cmd (resolve-cmd linter (:exclude params))]
     (if (nil? cmd)
       (error-payload title [] 1 (unavailable-msg linter))
       (try
@@ -327,6 +342,7 @@
       :id id
       :title (or (:title params) plugin-name)
       :summary-html (summary-html (:summary cache))
+      :collapsible? true
       :params (assoc params :id id)})))
 
 (defn- start-scan!
@@ -336,7 +352,7 @@
    {:plugin plugin-name
     :id (or (:id params) plugin-name)
     :label (str plugin-name "-scan")
-    :compute! #(compute! linter-key)}))
+    :compute! #(compute! linter-key params)}))
 
 (defn linter-plugin
   "Plugin map for the long-running, cached runner of `linter-key`."

@@ -644,15 +644,31 @@ def skip_dir(name: str) -> bool:
     return low in IGNORED_DIRS or name in EXACT_IGNORED_DIRS or low.startswith(IGNORED_DIR_PREFIXES)
 
 
-def iter_files(target: Path, extensions: tuple[str, ...] = EXTENSIONS) -> Iterable[Path]:
+EXCLUDE_HELP = ("Directory to skip (repeatable). A bare name (`.cache`) is skipped at any depth; "
+                "a path (`apps/x/.cache`) is relative to the target directory.")
+
+
+def normalize_excludes(raw: Iterable[str]) -> tuple[str, ...]:
+    return tuple(e.strip().removeprefix("./").strip("/") for e in raw if e.strip().strip("/."))
+
+
+def is_excluded(rel: str, excludes: tuple[str, ...]) -> bool:
+    """Whether directory `rel` (posix, relative to the target) matches an --exclude."""
+    name = rel.rsplit("/", 1)[-1]
+    return any(name == e if "/" not in e else rel == e or rel.startswith(e + "/") for e in excludes)
+
+
+def iter_files(target: Path, excludes: tuple[str, ...] = ()) -> Iterable[Path]:
     if target.is_file():
-        if target.name.endswith(extensions):
+        if target.name.endswith(EXTENSIONS):
             yield target
         return
     for root, dirs, files in os.walk(target):
-        dirs[:] = sorted(d for d in dirs if not skip_dir(d))
+        here = Path(root).relative_to(target).as_posix()
+        dirs[:] = sorted(d for d in dirs if not skip_dir(d)
+                         and not is_excluded(d if here == "." else f"{here}/{d}", excludes))
         for name in sorted(files):
-            if name.endswith(extensions):
+            if name.endswith(EXTENSIONS):
                 yield Path(root) / name
 
 
@@ -665,10 +681,10 @@ def analyse_file(path: Path) -> tuple[list[Finding], list[DupCandidate]]:
     return findings, candidates
 
 
-def lint_path(target: Path) -> list[Finding]:
+def lint_path(target: Path, excludes: tuple[str, ...] = ()) -> list[Finding]:
     findings: list[Finding] = []
     candidates: list[DupCandidate] = []
-    for path in iter_files(target):
+    for path in iter_files(target, excludes):
         file_findings, file_candidates = analyse_file(path)
         findings += file_findings
         candidates += file_candidates
@@ -679,12 +695,14 @@ def lint_path(target: Path) -> list[Finding]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Lint C++ code for structural style risks.")
     parser.add_argument("path", nargs="?", default=".", help="Target file or directory")
-    target = Path(parser.parse_args().path)
+    parser.add_argument("--exclude", action="append", default=[], metavar="DIR", help=EXCLUDE_HELP)
+    args = parser.parse_args()
+    target = Path(args.path)
     if not target.exists():
         print(f"{target}:1:1 [WARN] target-path-not-found")
         return 2
     sys.setrecursionlimit(10000)
-    for finding in lint_path(target):
+    for finding in lint_path(target, normalize_excludes(args.exclude)):
         print(finding.render())
     return 0
 
